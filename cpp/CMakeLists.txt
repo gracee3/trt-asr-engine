@@ -6,21 +6,36 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FindPackageHandleStandardArgs)
 
-# TensorRT
-find_path(TRT_INCLUDE_DIR NvInfer.h PATHS /usr/local/cuda/include /usr/include/x86_64-linux-gnu)
-find_library(TRT_INFER_LIB nvinfer PATHS /usr/local/cuda/lib64 /usr/lib/x86_64-linux-gnu)
-find_library(TRT_ONNX_LIB nvonnxparser PATHS /usr/local/cuda/lib64 /usr/lib/x86_64-linux-gnu)
+# Options
+option(PARAKEET_MOCK "Build with mock implementation for testing without CUDA/TRT" OFF)
 
-# SentencePiece
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SP sentencepiece)
+if(PARAKEET_MOCK)
+    message(STATUS "Building in MOCK mode")
+    add_definitions(-DPARAKEET_MOCK)
+    add_library(parakeet_trt SHARED
+        src/mock_lib.cpp
+    )
+else()
+    # TensorRT
+    find_path(TRT_INCLUDE_DIR NvInfer.h PATHS /usr/local/cuda/include /usr/include/x86_64-linux-gnu /opt/nvidia/tensorrt/include)
+    find_library(TRT_INFER_LIB nvinfer PATHS /usr/local/cuda/lib64 /usr/lib/x86_64-linux-gnu /opt/nvidia/tensorrt/lib)
+    find_library(TRT_ONNX_LIB nvonnxparser PATHS /usr/local/cuda/lib64 /usr/lib/x86_64-linux-gnu /opt/nvidia/tensorrt/lib)
 
-add_library(parakeet_trt SHARED
-    src/parakeet_trt.cpp
-    src/engine_manager.cpp
-    src/tokenizer.cpp
-    src/decoder.cpp
-)
+    # SentencePiece
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SP sentencepiece)
+
+    if(NOT TRT_INCLUDE_DIR OR NOT TRT_INFER_LIB)
+        message(FATAL_ERROR "TensorRT not found. Deeply sorry. Please install it or run with -DPARAKEET_MOCK=ON")
+    endif()
+
+    add_library(parakeet_trt SHARED
+        src/parakeet_trt.cpp
+        src/engine_manager.cpp
+        src/tokenizer.cpp
+        src/decoder.cpp
+    )
+endif()
 
 target_include_directories(parakeet_trt PUBLIC 
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

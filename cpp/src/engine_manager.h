@@ -31,9 +31,9 @@ public:
 private:
     std::string model_dir_;
     bool use_fp16_;
-    
+    nvinfer1::IRuntime* runtime_;
+
     struct EngineInstance {
-        nvinfer1::IRuntime* runtime;
         nvinfer1::ICudaEngine* engine;
         nvinfer1::IExecutionContext* context;
     };
