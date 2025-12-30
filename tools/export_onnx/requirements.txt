@@ -1,0 +1,5 @@
+torch
+nemo_toolkit[asr]
+onnx
+onnxruntime
+onnx-simplifier

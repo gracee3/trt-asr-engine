@@ -1,99 +1,16 @@
-########################################
-# General
-########################################
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-*~
-*.bak
-*.tmp
-
-########################################
-# Models / Large Artifacts (LOCAL ONLY)
-########################################
-models/
-*.engine
-*.plan
-*.onnx
-*.trt
-*.calib
-*.cache
-
-########################################
-# TensorRT / CUDA
-########################################
-.trt/
-.cuda/
-nvprof/
-*.nvvp
-*.cubin
-*.fatbin
-
-########################################
-# Build outputs (C++ / CMake)
-########################################
-build/
-build-*/
-cmake-build-*/
-CMakeCache.txt
-CMakeFiles/
-Makefile
-*.o
-*.a
-*.so
-*.dll
-*.dylib
-*.exe
-
-########################################
-# Rust
-########################################
-target/
-**/target/
-Cargo.lock
-**/*.rs.bk
-
-########################################
-# Python (tools/export_onnx, etc.)
-########################################
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.env
 .venv/
-venv/
-env/
-pip-wheel-metadata/
-.eggs/
-*.egg-info/
+models/
+tools/export_onnx/out/
+tools/build_trt/out/
+__pycache__/
+*.onnx
+*.plan
+*.engine
+.DS_Store
+*.wav
 
-########################################
-# Jupyter / Experimentation
-########################################
-.ipynb_checkpoints/
-
-########################################
-# Logs / Dumps
-########################################
-*.log
-logs/
-dump/
-core.*
-
-########################################
-# Editor / IDE
-########################################
-.vscode/
-.idea/
-*.iml
-
-########################################
-# OS / System
-########################################
-*.DS_Store
-ehthumbs.db
-desktop.ini
+cpp/build/
+libparakeet_trt.so
+rust/target/
 hf_parakeet_cache/
-parakeet-tdt-0.6b-v3.nemo
+hf_parakeet_cache/parakeet-tdt-0.6b-v3.nemo

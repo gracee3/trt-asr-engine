@@ -1,0 +1,3 @@
+torch
+nemo_toolkit[asr]
+librosa

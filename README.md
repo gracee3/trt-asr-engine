@@ -1,58 +1,39 @@
-# Parakeet TDT TensorRT Prototype
+# Parakeet TRT STT Prototype
 
-Offline, true streaming ASR prototype using Rust for feature extraction and C++ for TensorRT inference.
+This repository contains a standalone prototype for high-performance Speech-to-Text using NVIDIA's Parakeet-TDT model, optimized with TensorRT and a C++ runtime.
 
-## Objective
-Prove the viability of a high-performance streaming ASR pipeline:
-**Rust Audio (CPU) -> TensorRT (FP16/GPU) -> Rust FFI -> CLI**
-
-## Model Attribution
-This project uses the **Parakeet-TDT 0.6B v3** model by NVIDIA.
-- **Model Card:** [nvidia/parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
-- **License:** [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/)
+## Architecture
+Rust features → ONNX export → TensorRT engines → C++ runtime (C ABI) → Rust FFI → CLI
 
 ## Project Structure
-- `tools/export_onnx/`: Python scripts to export NeMo models to ONNX.
-- `tools/build_trt/`: Scripts to compile ONNX to TensorRT engines.
-- `cpp/`: TensorRT runtime implementation with a stable C ABI.
-- `rust/`: Workspace containing:
-    - `features`: Log-mel feature extraction.
-    - `parakeet_trt_sys`: Low-level FFI bindings.
-    - `parakeet_trt`: High-level safe wrapper.
-    - `cli`: Command-line transcription tool.
+- `models/`: Local model assets (gitignored).
+- `tools/verify_nemo/`: Python harness to validate model correctness using NeMo.
+- `tools/export_onnx/`: Tooling to export .nemo models to ONNX components.
+- `tools/build_trt/`: Scripts to build TensorRT engines from ONNX.
+- `cpp/`: TensorRT runtime with a stable C ABI.
+- `rust/`: Audio feature extraction, FFI bindings, and CLI.
 
-## Requirements
-- CUDA 12.x + cuDNN
-- TensorRT 10.x
-- Rust 1.75+
-- CMake 3.20+
-- SentencePiece (C++ library)
+## Getting Started
 
-## Installation & Build
+### 1. Model Preparation
+The model used is [NVIDIA Parakeet-TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3).
+Place the `.nemo` file in `models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo`.
+
+### 2. NeMo Verification
+Validate the model locally:
 ```bash
-# 1. Build C++ Runtime
-cd cpp && mkdir build && cd build
-cmake ..
-make -j$(nproc)
-
-# 2. Build Rust CLI
-cd ../../rust
-cargo build --release
+cd tools/verify_nemo
+pip install -r requirements.txt
+python verify.py --model ../../models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo --wav path/to/audio.wav
 ```
 
-## Usage
-Expects a model directory with:
-- `encoder.engine`
-- `predictor.engine`
-- `joint.engine`
-- `tokenizer.model`
-- `model_meta.json`
-
+### 3. ONNX Export
+Export the encoder, predictor, and joint components:
 ```bash
-cargo run --bin transcribe -- <wav_file> --model-dir ./models/parakeet-tdt-0.6b-v3 --stream-sim 0.5
+cd tools/export_onnx
+pip install -r requirements.txt
+python export.py --model ../../models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo
 ```
 
-## Verification Plan
-1. Use `tools/export_onnx/golden_transcript.py` to get the reference output from NeMo.
-2. Run the CLI and compare the result.
-3. Validate feature extractor output against NeMo's `AudioToMelSpectrogram`.
+## Attribution
+This project uses the Parakeet-TDT 0.6b-v3 model by NVIDIA, licensed under [CC-BY-4.0](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3).
