@@ -16,3 +16,7 @@ libparakeet_trt.so
 rust/target/
 hf_parakeet_cache/
 hf_parakeet_cache/parakeet-tdt-0.6b-v3.nemo
+apps/trt_runtime_smoke/build/
+
+cpp/build_mock/
+
