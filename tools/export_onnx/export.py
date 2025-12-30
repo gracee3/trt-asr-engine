@@ -10,12 +10,36 @@ import logging
 from datetime import datetime
 from contextlib import contextmanager
 import inspect
+import sys
 import nemo.collections.asr as nemo_asr
 from nemo.core.classes.common import typecheck
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+def _onnx_io_summary(path: str):
+    """
+    Return (inputs, outputs) as lists of dicts: {name: str, dims: [str|int]}.
+    Uses load_external_data=False so it stays fast even for >2GB models.
+    """
+    m = onnx.load_model(path, load_external_data=False)
+
+    def _dims(v):
+        t = v.type.tensor_type
+        out = []
+        for d in t.shape.dim:
+            if d.dim_param:
+                out.append(d.dim_param)
+            elif d.dim_value:
+                out.append(int(d.dim_value))
+            else:
+                out.append("?")
+        return out
+
+    ins = [{"name": i.name, "dims": _dims(i)} for i in m.graph.input]
+    outs = [{"name": o.name, "dims": _dims(o)} for o in m.graph.output]
+    return ins, outs
 
 class ExportHeartbeat(threading.Thread):
     def __init__(self, interval=5):
@@ -336,6 +360,41 @@ def export_joint(model, out_dir, device):
     logger.info(f"Finished writing: {path}")
     validate_onnx(path)
 
+def _smoke_test_onnxruntime(predictor_path: str, joint_path: str):
+    """
+    Minimal ORT smoke test: run predictor once and joint once to catch exported-but-unusable graphs.
+    """
+    try:
+        import numpy as np
+        import onnxruntime as ort
+    except Exception as e:
+        raise RuntimeError(f"onnxruntime smoke test requested but dependencies missing: {e}")
+
+    logger.info("Running ONNX Runtime smoke test (CPUExecutionProvider)...")
+    sess_opt = ort.SessionOptions()
+    providers = ["CPUExecutionProvider"]
+
+    # Predictor: y:int64 [1,1], h/c: float32 [2,1,640] -> g: float32 [1,640,1], h_out/c_out
+    pred_sess = ort.InferenceSession(predictor_path, sess_options=sess_opt, providers=providers)
+    pred_inputs = {i.name: i for i in pred_sess.get_inputs()}
+    if not {"y", "h", "c"}.issubset(set(pred_inputs.keys())):
+        raise RuntimeError(f"Predictor inputs unexpected: {list(pred_inputs.keys())}")
+    y = np.zeros((1, 1), dtype=np.int64)
+    h = np.zeros((2, 1, 640), dtype=np.float32)
+    c = np.zeros((2, 1, 640), dtype=np.float32)
+    g, h_out, c_out = pred_sess.run(None, {"y": y, "h": h, "c": c})
+    logger.info(f"ORT predictor ok | g={g.shape} {g.dtype}, h_out={h_out.shape}, c_out={c_out.shape}")
+
+    # Joint: encoder_output float32 [1,1024,1], predictor_output float32 [1,640,1] -> joint_output [1,1,1,8198]
+    joint_sess = ort.InferenceSession(joint_path, sess_options=sess_opt, providers=providers)
+    joint_inputs = {i.name: i for i in joint_sess.get_inputs()}
+    if not {"encoder_output", "predictor_output"}.issubset(set(joint_inputs.keys())):
+        raise RuntimeError(f"Joint inputs unexpected: {list(joint_inputs.keys())}")
+    enc = np.zeros((1, 1024, 1), dtype=np.float32)
+    pred = np.zeros((1, 640, 1), dtype=np.float32)
+    (joint_out,) = joint_sess.run(None, {"encoder_output": enc, "predictor_output": pred})
+    logger.info(f"ORT joint ok | joint_output={joint_out.shape} {joint_out.dtype}")
+
 def export_tokenizer_assets(model, out_dir: str):
     """
     Best-effort export of tokenizer and vocab assets for offline TRT builds.
@@ -395,6 +454,7 @@ def main():
     parser.add_argument("--component", type=str, choices=['encoder', 'predictor', 'joint', 'all'], default='all')
     parser.add_argument("--fixed", action='store_true', help="Export with fixed shapes (no dynamic axes)")
     parser.add_argument("--device", type=str, choices=["cpu", "cuda"], default="cpu", help="Export device (default: cpu)")
+    parser.add_argument("--smoke-test-ort", action="store_true", help="Run minimal ONNX Runtime smoke test after export")
     args = parser.parse_args()
 
     # Start Heartbeat
@@ -418,13 +478,50 @@ def main():
     model.eval()
     logger.info("Model set to eval() and grad disabled; exports will run under torch.inference_mode()")
 
+    # Infer key vocab/joint metadata (best-effort).
+    tokenizer_vocab_size = None
+    try:
+        if hasattr(model, "decoder") and hasattr(model.decoder, "vocabulary"):
+            tokenizer_vocab_size = len(model.decoder.vocabulary)
+    except Exception:
+        tokenizer_vocab_size = None
+
+    joint_vocab_size = None
+    try:
+        # RNNTJoint uses `num_classes_with_blank` as the output dim of the final linear.
+        joint_vocab_size = int(getattr(model.joint, "num_classes_with_blank", 0)) or None
+    except Exception:
+        joint_vocab_size = None
+
+    duration_values = None
+    try:
+        # NeMo TDT loss often exposes `durations` via loss internals; keep best-effort.
+        loss = getattr(model.joint, "loss", None)
+        inner = getattr(loss, "_loss", None)
+        dv = getattr(inner, "durations", None)
+        if dv is not None:
+            duration_values = list(dv)
+    except Exception:
+        duration_values = None
+
     # Save metadata
     metadata = {
         "model_name": "parakeet-tdt-0.6b-v3",
         "sample_rate": model.cfg.preprocessor.get('sample_rate', 16000),
         "labels": model.decoder.vocabulary if hasattr(model.decoder, 'vocabulary') else [],
         "blank_id": int(getattr(getattr(model, "decoder", None), "blank_idx", 0)),
+        "tokenizer_vocab_size": tokenizer_vocab_size,
+        "joint_vocab_size": joint_vocab_size,
+        "duration_values": duration_values,
         "torch_version": torch.__version__,
+        "tensor_layout_contract": {
+            "encoder_input": "audio_signal: [B, n_mels, T]",
+            "encoder_output": "encoder_output: [B, D_enc(=1024), T_enc]",
+            "predictor_input": "y: [B, U], h/c: [L, B, H]",
+            "predictor_output": "g: [B, H(=640), U] (transposed from NeMo [B,U,H])",
+            "joint_input": "encoder_output: [B, 1024, T], predictor_output: [B, 640, U]",
+            "joint_output": "joint_output: [B, T, U, V_joint(=8198)]",
+        },
         "features": {
             "type": "log-mel",
             "n_fft": model.cfg.preprocessor.get('n_fft', 512),
@@ -438,24 +535,51 @@ def main():
 
     components = [args.component] if args.component != 'all' else ['encoder', 'predictor', 'joint']
 
+    exported = []
+    failed = False
     for comp in components:
         heartbeat.set_stage(f"Exporting {comp}")
         try:
             with torch.inference_mode():
                 if comp == 'encoder':
                     export_encoder(model, args.out, device, dynamic=not args.fixed)
+                    exported.append(os.path.join(args.out, "encoder.onnx"))
                 elif comp == 'predictor':
                     export_predictor(model, args.out, device)
+                    exported.append(os.path.join(args.out, "predictor.onnx"))
                 elif comp == 'joint':
                     export_joint(model, args.out, device)
+                    exported.append(os.path.join(args.out, "joint.onnx"))
         except Exception as e:
+            failed = True
             logger.error(f"FATAL ERROR exporting {comp}: {e}")
             import traceback
             traceback.print_exc()
 
     heartbeat.set_stage("Finished")
     heartbeat.stop()
-    print("Export process completed.")
+    logger.info("=== Export artifact manifest ===")
+    for p in exported:
+        try:
+            ins, outs = _onnx_io_summary(p)
+            data_path = p + ".data"
+            extra = f" (+external data: {data_path})" if os.path.exists(data_path) else ""
+            logger.info(f"- {p}{extra}")
+            logger.info(f"  inputs: {ins}")
+            logger.info(f"  outputs: {outs}")
+        except Exception as e:
+            logger.warning(f"- {p}: failed to summarize IO: {e}")
+
+    if args.smoke_test_ort and (os.path.exists(os.path.join(args.out, 'predictor.onnx')) and os.path.exists(os.path.join(args.out, 'joint.onnx'))):
+        _smoke_test_onnxruntime(
+            os.path.join(args.out, "predictor.onnx"),
+            os.path.join(args.out, "joint.onnx"),
+        )
+
+    if failed:
+        logger.error("Export failed (one or more components). Exiting with code 1.")
+        sys.exit(1)
+    logger.info("Export completed successfully.")
 
 if __name__ == "__main__":
     main()

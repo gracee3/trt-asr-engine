@@ -4,6 +4,7 @@ tools/export_onnx/out/
 tools/build_trt/out/
 __pycache__/
 *.onnx
+*.onnx.data
 *.plan
 *.engine
 .DS_Store

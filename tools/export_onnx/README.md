@@ -31,10 +31,21 @@ python -u export.py \
   --device cpu
 ```
 
+To add a minimal ONNX Runtime smoke test (recommended for CI):
+
+```bash
+python -u export.py \
+  --model ../../models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
+  --out ./out \
+  --component all \
+  --device cpu \
+  --smoke-test-ort
+```
+
 ## Expected Shapes (Example for 0.6B)
 - **Encoder**: 
-  - Input: `[1, 80, T]` (Log-Mel features)
-  - Output: `[1, D_enc, T_enc]`
+  - Input: `audio_signal [B, 128, T]` and `length [1]` (**as exported**)
+  - Outputs: `encoder_output [B, 1024, T_enc]` and `encoded_lengths [1]`
 - **Predictor**:
   - Inputs:
     - `y`: token IDs `[B, U]` (typically streaming uses `U=1`)
@@ -64,6 +75,10 @@ python -u export.py \
 - **Export-only joint fuse patch**:
   - Some NeMo versions ship `RNNTJoint` with `fuse_loss_wer=True`, which forces transcript/length inputs (training plumbing).
   - `export.py` temporarily disables this for export so the joint graph is pure inference: `(encoder_output, predictor_output) -> joint_output`.
+
+- **Encoder external data (`.onnx.data`)**:
+  - If the encoder ONNX exceeds protobuf size limits, PyTorch will emit `encoder.onnx` **plus** `encoder.onnx.data` (external weights).
+  - Keep these together for TensorRT build steps.
 
 - Dynamic axes are enabled for the time/token dimensions unless `--fixed` is set.
 - The export writes `model_meta.json`, `vocab.txt` (if available), and best-effort `tokenizer.model`.
