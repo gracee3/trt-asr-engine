@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rustc-link-lib=parakeet_trt");
-    println!("cargo:rustc-link-search=native=../../cpp/build");
+    println!("cargo:rustc-link-search=native=/home/emmy/git/parakeet/cpp/build");
 
     let bindings = bindgen::Builder::default()
         .header("../../cpp/include/parakeet_trt.h")
