@@ -104,7 +104,22 @@ This produces:
 
 ### 5) Build TensorRT engines (placeholder)
 
-Engine build scripts live under `tools/build_trt/`. Expect this to evolve as the runtime decode loop solidifies.
+Engine build scripts live under `tools/build_trt/` and require **TensorRT’s `trtexec`** to be installed and available in `PATH`.
+
+Minimal command:
+
+```bash
+python tools/build_trt/build_trt.py \
+  --meta tools/export_onnx/out/model_meta.json \
+  --outdir models/parakeet-tdt-0.6b-v3 \
+  --fp16
+```
+
+Expected outputs:
+
+- `models/parakeet-tdt-0.6b-v3/{encoder,predictor,joint}.engine`
+- `models/parakeet-tdt-0.6b-v3/build_report.json`
+- `models/parakeet-tdt-0.6b-v3/build_logs/*.log`
 
 ## Repository structure
 

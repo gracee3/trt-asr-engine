@@ -5,9 +5,20 @@ This tool builds FP16 TensorRT engines for Parakeet RNNT-TDT components using **
 ## Prerequisites
 
 - NVIDIA TensorRT installed (recommended 10.x+)
-- `trtexec` available in `PATH`
+- `trtexec` available in `PATH` (**required**)
 - Python 3.9+
 - ONNX Python package available (`pip install onnx`) (the exporter already depends on it)
+
+### Quick sanity checks
+
+Before building, verify:
+
+```bash
+command -v trtexec
+trtexec --version
+```
+
+If `trtexec` is missing, install TensorRT (and ensure the `trtexec` binary from the TensorRT package is on your `PATH`).
 
 ## Minimal developer command
 

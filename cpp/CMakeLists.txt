@@ -14,6 +14,7 @@ if(PARAKEET_MOCK)
     add_definitions(-DPARAKEET_MOCK)
     add_library(parakeet_trt SHARED
         src/mock_lib.cpp
+        src/trt_asr.cpp
     )
 else()
     # TensorRT
@@ -34,6 +35,7 @@ else()
         src/engine_manager.cpp
         src/tokenizer.cpp
         src/decoder.cpp
+        src/trt_asr.cpp
     )
 endif()
 
@@ -48,5 +50,12 @@ target_link_libraries(parakeet_trt PRIVATE
     ${TRT_ONNX_LIB}
     ${SP_LIBRARIES}
 )
+
+# Small deterministic smoke test for the tensor-only greedy decode loop.
+add_executable(greedy_decode_smoke
+    src/greedy_decode_smoke.cpp
+)
+target_include_directories(greedy_decode_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_options(greedy_decode_smoke PRIVATE -Wall -Wextra -Wpedantic)
 
 # Install rules if needed
