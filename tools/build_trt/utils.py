@@ -64,17 +64,46 @@ def detect_external_data_files(onnx_path: Path) -> Tuple[str, ...]:
     onnx = _try_import_onnx()
     m = onnx.load_model(str(onnx_path), load_external_data=False)
 
-    # ONNX stores external tensor refs on initializers: data_location==EXTERNAL and an external_data list.
+    # ONNX can store external tensor refs in multiple places:
+    # - graph.initializer (typical for weights)
+    # - Constant node attributes (attr.t / attr.tensors)
+    #
+    # TensorRT's ONNX parser expects all referenced external blobs to be present
+    # in the same directory as the ONNX file.
     files: List[str] = []
-    for init in m.graph.initializer:
+
+    def _maybe_add_tensor_external_data(t) -> None:
         try:
-            if int(getattr(init, "data_location", 0)) != int(onnx.TensorProto.EXTERNAL):
-                continue
-            for kv in getattr(init, "external_data", []):
+            if int(getattr(t, "data_location", 0)) != int(onnx.TensorProto.EXTERNAL):
+                return
+            for kv in getattr(t, "external_data", []):
                 if getattr(kv, "key", "") == "location" and getattr(kv, "value", ""):
                     files.append(str(kv.value))
         except Exception:
-            continue
+            return
+
+    # Initializers
+    for init in m.graph.initializer:
+        _maybe_add_tensor_external_data(init)
+
+    # Constant node attributes
+    try:
+        attr_type_tensor = int(onnx.AttributeProto.TENSOR)
+        attr_type_tensors = int(getattr(onnx.AttributeProto, "TENSORS", 0))
+    except Exception:
+        attr_type_tensor = -1
+        attr_type_tensors = -1
+
+    for node in getattr(m.graph, "node", []):
+        for attr in getattr(node, "attribute", []):
+            try:
+                if int(getattr(attr, "type", -999)) == attr_type_tensor and hasattr(attr, "t"):
+                    _maybe_add_tensor_external_data(attr.t)
+                elif attr_type_tensors and int(getattr(attr, "type", -999)) == attr_type_tensors and hasattr(attr, "tensors"):
+                    for t in attr.tensors:
+                        _maybe_add_tensor_external_data(t)
+            except Exception:
+                continue
 
     # Unique, stable order
     uniq: List[str] = []
