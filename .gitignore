@@ -20,3 +20,5 @@ apps/trt_runtime_smoke/build/
 
 cpp/build_mock/
 
+apps/trt_runtime_smoke/build_real/
+
