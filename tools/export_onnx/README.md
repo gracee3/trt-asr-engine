@@ -36,11 +36,20 @@ python -u export.py \
   - Input: `[1, 80, T]` (Log-Mel features)
   - Output: `[1, D_enc, T_enc]`
 - **Predictor**:
-  - Input: `[1, 1]` (Single token for streaming)
-  - Output: `[1, D_pred, 1]`
+  - Inputs:
+    - `y`: token IDs `[B, U]` (typically streaming uses `U=1`)
+    - `h`: LSTM hidden state `[L, B, H]`
+    - `c`: LSTM cell state `[L, B, H]`
+  - Outputs:
+    - `g`: predictor embedding `[B, H, U]` (this is **transposed** from NeMo’s internal `[B, U, H]` for joint compatibility)
+    - `h_out`: next hidden state `[L, B, H]`
+    - `c_out`: next cell state `[L, B, H]`
 - **Joint**:
-  - Inputs: `[1, D_enc, 1]`, `[1, D_pred, 1]`
-  - Outputs: `logits [1, 1, 1, V]`, `durations [1, 1, 1]`
+  - Inputs:
+    - `encoder_output`: `[B, D_enc, T]`
+    - `predictor_output`: `[B, H, U]`
+  - Output:
+    - `joint_output`: `[B, T, U, V_joint]` (for this model `V_joint = 8198`)
 
 ## Notes
 - This repo uses **torch 2.9+**, where `torch.onnx.export` defaults to **`dynamo=True`** (new `torch.export`-based path).
@@ -51,6 +60,10 @@ python -u export.py \
   - During predictor/joint export, `export.py` temporarily patches any module attribute literally named `.dropout` where the value is `nn.Dropout`, setting it to `None`.
   - This avoids TorchScript / torch.export failures for patterns like `if self.dropout: x = self.dropout(x)`.
   - The patch is scoped to the predictor/joint path and is restored afterwards; it is logged.
+
+- **Export-only joint fuse patch**:
+  - Some NeMo versions ship `RNNTJoint` with `fuse_loss_wer=True`, which forces transcript/length inputs (training plumbing).
+  - `export.py` temporarily disables this for export so the joint graph is pure inference: `(encoder_output, predictor_output) -> joint_output`.
 
 - Dynamic axes are enabled for the time/token dimensions unless `--fixed` is set.
 - The export writes `model_meta.json`, `vocab.txt` (if available), and best-effort `tokenizer.model`.

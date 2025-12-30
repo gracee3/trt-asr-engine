@@ -186,9 +186,21 @@ class PredictorWrapper(torch.nn.Module):
         super().__init__()
         self.predictor = predictor
         # Best-effort infer LSTM state shapes for a stable ONNX signature.
-        rnn = getattr(self.predictor, "pred_rnn", None)
-        self.num_layers = int(getattr(rnn, "num_layers", 2) or 2)
-        self.hidden_size = int(getattr(rnn, "hidden_size", 640) or 640)
+        num_layers, hidden_size = 2, 640
+        try:
+            # NeMo RNNTDecoder commonly stores the prediction network here:
+            # decoder.prediction['dec_rnn'].lstm
+            pred = getattr(self.predictor, "prediction", None)
+            if pred is not None and hasattr(pred, "__getitem__"):
+                dec_rnn = pred["dec_rnn"]
+                lstm = getattr(dec_rnn, "lstm", None)
+                if lstm is not None:
+                    num_layers = int(getattr(lstm, "num_layers", num_layers) or num_layers)
+                    hidden_size = int(getattr(lstm, "hidden_size", hidden_size) or hidden_size)
+        except Exception:
+            pass
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
 
     def forward(self, y, h, c):
         """
@@ -199,12 +211,16 @@ class PredictorWrapper(torch.nn.Module):
         # Prefer RNNTDecoder.predict() which is explicitly inference-oriented.
         if hasattr(self.predictor, "predict"):
             g, state = self.predictor.predict(y=y, state=[h, c], add_sos=False)
+            # NeMo returns g as (B, U, D). For consistency with RNNTJoint input
+            # (decoder_outputs expected as (B, D, U)), transpose here.
+            g = g.transpose(1, 2)
             return g, state[0], state[1]
 
         # Fallback to forward(targets, target_length, states=...)
         # Note: target_length is derived from y.shape[1].
         target_length = torch.full((y.shape[0],), y.shape[1], dtype=torch.long, device=y.device)
         g, _, state = self.predictor(targets=y, target_length=target_length, states=[h, c])
+        g = g.transpose(1, 2)
         return g, state[0], state[1]
 
 class JointWrapper(torch.nn.Module):
