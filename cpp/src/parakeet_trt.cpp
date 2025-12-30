@@ -2,6 +2,7 @@
 #include "tokenizer.h"
 #include "decoder.h"
 
+#include <cmath>
 #include <NvInfer.h>
 #include <cuda_runtime_api.h>
 
@@ -229,6 +230,13 @@ static std::string find_vocab_path(const std::string& model_dir) {
   throw std::runtime_error("Could not locate vocab.txt (tried " + direct.string() + " and " + fallback.string() + ")");
 }
 
+struct ParakeetEventInternal {
+  ParakeetEventType type;
+  int32_t segment_id;
+  std::string text;
+  std::string error_message;
+};
+
 }  // namespace
 
 struct ParakeetSession {
@@ -265,13 +273,19 @@ struct ParakeetSession {
   void* d_enc_len = nullptr;
 
   // Event plumbing.
-  std::queue<ParakeetEvent> event_queue;
+  std::queue<ParakeetEventInternal> event_queue;
   std::mutex event_mutex;
-  std::string current_text;
-  std::string current_error;
+  std::string last_poll_text;
+  std::string last_poll_err;
+
+  std::vector<uint16_t> host_joint_logits_fp16;
+  std::vector<float> host_joint_logits_f32;
 
   ParakeetSession(const ParakeetConfig* config)
-      : model_dir(config->model_dir), device_id(config->device_id), use_fp16(config->use_fp16) {}
+      : model_dir(config->model_dir), device_id(config->device_id), use_fp16(config->use_fp16) {
+    host_joint_logits_fp16.resize(kJointVocabSize);
+    host_joint_logits_f32.resize(kJointVocabSize);
+  }
 };
 
 ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
@@ -303,6 +317,7 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
     session->pred = load("predictor");
     session->joint = load("joint");
 
+
     // Tokenizer + decoder.
     session->tokenizer = std::make_shared<Tokenizer>(find_vocab_path(session->model_dir));
     // Token vocab includes blank_id; duration head handled separately.
@@ -321,8 +336,10 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
     session->d_c_out = session->pred.tensors["c_out"];
 
     // Initialize predictor state to zeros.
-    cuda_check(cudaMemsetAsync(session->d_h, 0, kPredLayers * 1 * kPredDim * 2, session->stream), "cudaMemsetAsync(h)");
-    cuda_check(cudaMemsetAsync(session->d_c, 0, kPredLayers * 1 * kPredDim * 2, session->stream), "cudaMemsetAsync(c)");
+    const size_t h_bytes = volume(session->pred.ctx->getTensorShape("h")) * dtype_size(session->pred.engine->getTensorDataType("h"));
+    const size_t c_bytes = volume(session->pred.ctx->getTensorShape("c")) * dtype_size(session->pred.engine->getTensorDataType("c"));
+    cuda_check(cudaMemsetAsync(session->d_h, 0, h_bytes, session->stream), "cudaMemsetAsync(h)");
+    cuda_check(cudaMemsetAsync(session->d_c, 0, c_bytes, session->stream), "cudaMemsetAsync(c)");
 
     // Configure joint shapes for slice mode: encoder_output [1,1024,16], predictor_output [1,640,1].
     set_input_shape_or_throw(session->joint, "encoder_output", {1, kEncDim, kTrtChunkT});
@@ -367,6 +384,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       throw std::runtime_error("num_frames exceeds encoder profile max (256) for this demo runtime");
     }
 
+
     const int32_t T_valid = static_cast<int32_t>(num_frames);
     const int32_t T_shape = std::max<int32_t>(kTrtMinT, T_valid);
 
@@ -384,17 +402,25 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     cuda_check(cudaMemcpyAsync(session->d_length, &host_len, sizeof(host_len), cudaMemcpyHostToDevice, session->stream),
                "cudaMemcpyAsync(length)");
 
-    // Host -> device: audio features (FP16 expected).
-    std::vector<uint16_t> host_audio_fp16(static_cast<size_t>(kNMels) * static_cast<size_t>(T_shape), 0);
-    for (int32_t m = 0; m < kNMels; ++m) {
-      for (int32_t t = 0; t < T_valid; ++t) {
-        const float v = features_bct_f32[static_cast<size_t>(m) * static_cast<size_t>(T_valid) + static_cast<size_t>(t)];
-        host_audio_fp16[static_cast<size_t>(m) * static_cast<size_t>(T_shape) + static_cast<size_t>(t)] = f32_to_fp16(v);
+    // Host -> device: audio features.
+    nvinfer1::DataType audio_dt = session->enc.engine->getTensorDataType("audio_signal");
+    if (audio_dt == nvinfer1::DataType::kHALF) {
+      std::vector<uint16_t> host_audio_fp16(static_cast<size_t>(kNMels) * static_cast<size_t>(T_shape), 0);
+      for (int32_t m = 0; m < kNMels; ++m) {
+        for (int32_t t = 0; t < T_valid; ++t) {
+          host_audio_fp16[static_cast<size_t>(m) * static_cast<size_t>(T_shape) + static_cast<size_t>(t)] = f32_to_fp16(features_bct_f32[static_cast<size_t>(m) * static_cast<size_t>(T_valid) + static_cast<size_t>(t)]);
+        }
       }
+      cuda_check(cudaMemcpyAsync(session->d_audio, host_audio_fp16.data(), host_audio_fp16.size() * 2, cudaMemcpyHostToDevice, session->stream), "cudaMemcpyAsync(audio_signal)");
+    } else {
+      std::vector<float> host_audio_f32(static_cast<size_t>(kNMels) * static_cast<size_t>(T_shape), 0.0f);
+      for (int32_t m = 0; m < kNMels; ++m) {
+        for (int32_t t = 0; t < T_valid; ++t) {
+          host_audio_f32[static_cast<size_t>(m) * static_cast<size_t>(T_shape) + static_cast<size_t>(t)] = features_bct_f32[static_cast<size_t>(m) * static_cast<size_t>(T_valid) + static_cast<size_t>(t)];
+        }
+      }
+      cuda_check(cudaMemcpyAsync(session->d_audio, host_audio_f32.data(), host_audio_f32.size() * 4, cudaMemcpyHostToDevice, session->stream), "cudaMemcpyAsync(audio_signal)");
     }
-    cuda_check(cudaMemcpyAsync(session->d_audio, host_audio_fp16.data(),
-                               host_audio_fp16.size() * sizeof(uint16_t), cudaMemcpyHostToDevice, session->stream),
-               "cudaMemcpyAsync(audio_signal)");
 
     // Run encoder.
     enqueue_or_throw(session->enc, session->stream);
@@ -408,20 +434,29 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     const int32_t T_enc = static_cast<int32_t>(enc_len_host);
     if (T_enc <= 0 || T_enc > T_shape) throw std::runtime_error("Invalid encoded_lengths from encoder");
 
-    // Copy encoder output to host once for decoding (FP16, layout [1,1024,T_enc] BCT).
-    std::vector<uint16_t> host_enc_out_fp16(static_cast<size_t>(kEncDim) * static_cast<size_t>(T_enc));
-    cuda_check(cudaMemcpyAsync(host_enc_out_fp16.data(), session->d_enc_out,
-                               host_enc_out_fp16.size() * sizeof(uint16_t), cudaMemcpyDeviceToHost, session->stream),
-               "cudaMemcpyAsync(encoder_output)");
-    cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(encoder_output)");
+    // Copy encoder output to host once for decoding.
+    nvinfer1::DataType enc_out_dt = session->enc.engine->getTensorDataType("encoder_output");
+    std::vector<float> host_enc_out_f32(static_cast<size_t>(kEncDim) * static_cast<size_t>(T_enc));
+    if (enc_out_dt == nvinfer1::DataType::kHALF) {
+      std::vector<uint16_t> tmp(host_enc_out_f32.size());
+      cuda_check(cudaMemcpyAsync(tmp.data(), session->d_enc_out, tmp.size() * 2, cudaMemcpyDeviceToHost, session->stream), "cudaMemcpyAsync(enc_out)");
+      cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize");
+      for (size_t i = 0; i < tmp.size(); ++i) host_enc_out_f32[i] = fp16_to_f32(tmp[i]);
+    } else {
+      cuda_check(cudaMemcpyAsync(host_enc_out_f32.data(), session->d_enc_out, host_enc_out_f32.size() * 4, cudaMemcpyDeviceToHost, session->stream), "cudaMemcpyAsync(enc_out)");
+      cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize");
+    }
+
+
 
     // Greedy TDT decode loop using joint slices (T=16) due to engine min profile.
     int32_t y_id = kBlankId;
     std::vector<int> emitted;
     emitted.reserve(static_cast<size_t>(T_enc));
 
-    std::vector<uint16_t> host_joint_enc_slice_fp16(static_cast<size_t>(kEncDim) * static_cast<size_t>(kTrtChunkT));
-    std::vector<uint16_t> host_joint_logits_fp16(static_cast<size_t>(kJointVocabSize));
+    nvinfer1::DataType joint_enc_dt = session->joint.engine->getTensorDataType("encoder_output");
+    std::vector<float> host_joint_enc_slice_f32(static_cast<size_t>(kEncDim) * static_cast<size_t>(kTrtChunkT));
+    nvinfer1::DataType joint_out_dt = session->joint.engine->getTensorDataType("joint_output");
     std::vector<float> host_joint_logits_f32(static_cast<size_t>(kJointVocabSize));
 
     auto last_partial_emit = std::chrono::steady_clock::now() - std::chrono::milliseconds(1000);
@@ -438,26 +473,31 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor)");
 
       // Copy h_out/c_out back into h/c for next step.
-      const size_t hc_bytes = static_cast<size_t>(kPredLayers) * static_cast<size_t>(1) * static_cast<size_t>(kPredDim) * sizeof(uint16_t);
-      cuda_check(cudaMemcpyAsync(session->d_h, session->d_h_out, hc_bytes, cudaMemcpyDeviceToDevice, session->stream),
+      const size_t h_bytes = volume(session->pred.ctx->getTensorShape("h")) * dtype_size(session->pred.engine->getTensorDataType("h"));
+      const size_t c_bytes = volume(session->pred.ctx->getTensorShape("c")) * dtype_size(session->pred.engine->getTensorDataType("c"));
+      cuda_check(cudaMemcpyAsync(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream),
                  "cudaMemcpyAsync(h_out->h)");
-      cuda_check(cudaMemcpyAsync(session->d_c, session->d_c_out, hc_bytes, cudaMemcpyDeviceToDevice, session->stream),
+      cuda_check(cudaMemcpyAsync(session->d_c, session->d_c_out, c_bytes, cudaMemcpyDeviceToDevice, session->stream),
                  "cudaMemcpyAsync(c_out->c)");
 
       // Prepare joint encoder slice: replicate encoder frame across T=16.
       for (int32_t c = 0; c < kEncDim; ++c) {
-        const uint16_t v = host_enc_out_fp16[static_cast<size_t>(c) * static_cast<size_t>(T_enc) + static_cast<size_t>(time_idx)];
+        const float v = host_enc_out_f32[static_cast<size_t>(c) * static_cast<size_t>(T_enc) + static_cast<size_t>(time_idx)];
         const size_t base = static_cast<size_t>(c) * static_cast<size_t>(kTrtChunkT);
         for (int32_t t = 0; t < kTrtChunkT; ++t) {
-          host_joint_enc_slice_fp16[base + static_cast<size_t>(t)] = v;
+          host_joint_enc_slice_f32[base + static_cast<size_t>(t)] = v;
         }
       }
-      cuda_check(cudaMemcpyAsync(session->d_joint_enc_in, host_joint_enc_slice_fp16.data(),
-                                 host_joint_enc_slice_fp16.size() * sizeof(uint16_t), cudaMemcpyHostToDevice, session->stream),
-                 "cudaMemcpyAsync(joint.encoder_output)");
+      if (joint_enc_dt == nvinfer1::DataType::kHALF) {
+        std::vector<uint16_t> tmp(host_joint_enc_slice_f32.size());
+        for (size_t i = 0; i < tmp.size(); ++i) tmp[i] = f32_to_fp16(host_joint_enc_slice_f32[i]);
+        cuda_check(cudaMemcpyAsync(session->d_joint_enc_in, tmp.data(), tmp.size() * 2, cudaMemcpyHostToDevice, session->stream), "cudaMemcpyAsync(joint.enc)");
+      } else {
+        cuda_check(cudaMemcpyAsync(session->d_joint_enc_in, host_joint_enc_slice_f32.data(), host_joint_enc_slice_f32.size() * 4, cudaMemcpyHostToDevice, session->stream), "cudaMemcpyAsync(joint.enc)");
+      }
 
       // Wire predictor_output from predictor engine directly into joint by copying g -> joint predictor input.
-      const size_t g_bytes = static_cast<size_t>(kPredDim) * sizeof(uint16_t);
+      const size_t g_bytes = volume(session->pred.ctx->getTensorShape("g")) * dtype_size(session->pred.engine->getTensorDataType("g"));
       cuda_check(cudaMemcpyAsync(session->d_joint_pred_in, session->d_g, g_bytes, cudaMemcpyDeviceToDevice, session->stream),
                  "cudaMemcpyAsync(g->joint.predictor_output)");
 
@@ -466,20 +506,26 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(joint)");
 
       // Copy logits for first timestep (t=0,u=0) to host.
-      cuda_check(cudaMemcpyAsync(host_joint_logits_fp16.data(), session->d_joint_out,
-                                 host_joint_logits_fp16.size() * sizeof(uint16_t), cudaMemcpyDeviceToHost, session->stream),
-                 "cudaMemcpyAsync(joint_output)");
-      cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(joint_output)");
-
-      for (int32_t i = 0; i < kJointVocabSize; ++i) {
-        host_joint_logits_f32[static_cast<size_t>(i)] = fp16_to_f32(host_joint_logits_fp16[static_cast<size_t>(i)]);
+      if (joint_out_dt == nvinfer1::DataType::kHALF) {
+        cuda_check(cudaMemcpyAsync(session->host_joint_logits_fp16.data(), session->d_joint_out, session->host_joint_logits_fp16.size() * 2, cudaMemcpyDeviceToHost, session->stream), "cudaMemcpyAsync(joint_out_fp16)");
+        cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_out");
+        for (size_t i = 0; i < session->host_joint_logits_f32.size(); ++i) {
+          float f = fp16_to_f32(session->host_joint_logits_fp16[i]);
+          session->host_joint_logits_f32[i] = std::isnan(f) ? -100.0f : f;
+        }
+      } else {
+        cuda_check(cudaMemcpyAsync(session->host_joint_logits_f32.data(), session->d_joint_out, session->host_joint_logits_f32.size() * 4, cudaMemcpyDeviceToHost, session->stream), "cudaMemcpyAsync(joint_out_f32)");
+        cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_out");
+        for (size_t i = 0; i < session->host_joint_logits_f32.size(); ++i) {
+          if (std::isnan(session->host_joint_logits_f32[i])) session->host_joint_logits_f32[i] = -100.0f;
+        }
       }
 
       // Token argmax over [0..kTokenVocabSize)
       int best_tok = 0;
-      float best_tok_v = host_joint_logits_f32[0];
+      float best_tok_v = session->host_joint_logits_f32[0];
       for (int32_t i = 1; i < kTokenVocabSize; ++i) {
-        const float v = host_joint_logits_f32[static_cast<size_t>(i)];
+        const float v = session->host_joint_logits_f32[static_cast<size_t>(i)];
         if (v > best_tok_v) {
           best_tok_v = v;
           best_tok = i;
@@ -488,9 +534,9 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
       // Duration argmax over tail [kTokenVocabSize..kJointVocabSize)
       int best_dur_idx = 0;
-      float best_dur_v = host_joint_logits_f32[static_cast<size_t>(kTokenVocabSize)];
+      float best_dur_v = session->host_joint_logits_f32[static_cast<size_t>(kTokenVocabSize)];
       for (int32_t i = 1; i < kNumDurations; ++i) {
-        const float v = host_joint_logits_f32[static_cast<size_t>(kTokenVocabSize + i)];
+        const float v = session->host_joint_logits_f32[static_cast<size_t>(kTokenVocabSize + i)];
         if (v > best_dur_v) {
           best_dur_v = v;
           best_dur_idx = i;
@@ -501,6 +547,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       if (best_tok != kBlankId) {
         emitted.push_back(best_tok);
         y_id = best_tok;
+        // std::cout << "[STT] Emit \"" << session->tokenizer->decode({best_tok}) << "\" (logit=" << best_tok_v << ")" << std::endl;
       }
 
       // Emit partial hypothesis at most every ~100ms (best-effort).
@@ -509,14 +556,13 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         // Only decode if something changed since last emit.
         if (static_cast<int>(emitted.size()) != last_emitted_count) {
           last_emitted_count = static_cast<int>(emitted.size());
-          ParakeetEvent pev{};
+          ParakeetEventInternal pev{};
           pev.type = PARAKEET_EVENT_PARTIAL_TEXT;
           pev.segment_id = 0;
-          session->current_text = session->tokenizer->decode(emitted);
-          pev.text = session->current_text.c_str();
+          pev.text = session->tokenizer->decode(emitted);
           {
             std::lock_guard<std::mutex> lock(session->event_mutex);
-            session->event_queue.push(pev);
+            session->event_queue.push(std::move(pev));
           }
         }
         last_partial_emit = std::chrono::steady_clock::now();
@@ -532,22 +578,20 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     // Emit final transcript event.
     {
       std::lock_guard<std::mutex> lock(session->event_mutex);
-      ParakeetEvent ev{};
+      ParakeetEventInternal ev{};
       ev.type = PARAKEET_EVENT_FINAL_TEXT;
       ev.segment_id = 0;
-      session->current_text = session->tokenizer->decode(emitted);
-      ev.text = session->current_text.c_str();
-      session->event_queue.push(ev);
+      ev.text = session->tokenizer->decode(emitted);
+      session->event_queue.push(std::move(ev));
     }
 
     return 0;
   } catch (const std::exception& e) {
     std::lock_guard<std::mutex> lock(session->event_mutex);
-    ParakeetEvent ev{};
+    ParakeetEventInternal ev{};
     ev.type = PARAKEET_EVENT_ERROR;
-    session->current_error = e.what();
-    ev.error_message = session->current_error.c_str();
-    session->event_queue.push(ev);
+    ev.error_message = e.what();
+    session->event_queue.push(std::move(ev));
     return -2;
   }
 }
@@ -556,7 +600,16 @@ bool parakeet_poll_event(ParakeetSession* session, ParakeetEvent* event) {
   if (!session || !event) return false;
   std::lock_guard<std::mutex> lock(session->event_mutex);
   if (session->event_queue.empty()) return false;
-  *event = session->event_queue.front();
+  
+  ParakeetEventInternal& internal = session->event_queue.front();
+  session->last_poll_text = internal.text;
+  session->last_poll_err = internal.error_message;
+
+  event->type = internal.type;
+  event->segment_id = internal.segment_id;
+  event->text = session->last_poll_text.c_str();
+  event->error_message = session->last_poll_err.c_str();
+
   session->event_queue.pop();
   return true;
 }
