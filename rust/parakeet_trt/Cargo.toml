@@ -1,0 +1,8 @@
+[package]
+name = "parakeet_trt"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+parakeet_trt_sys = { path = "../parakeet_trt_sys" }
+thiserror = "1.0"

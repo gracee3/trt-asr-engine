@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "features",
+    "parakeet_trt_sys",
+    "parakeet_trt",
+    "cli",
+]
+resolver = "2"

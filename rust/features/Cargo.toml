@@ -1,0 +1,13 @@
+[package]
+name = "features"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustfft = "6.2"
+realfft = "3.3"
+num-complex = "0.4"
+ndarray = "0.15"
+
+[dev-dependencies]
+hound = "3.5"
