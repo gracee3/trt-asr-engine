@@ -95,3 +95,5 @@ core.*
 *.DS_Store
 ehthumbs.db
 desktop.ini
+hf_parakeet_cache/
+parakeet-tdt-0.6b-v3.nemo
