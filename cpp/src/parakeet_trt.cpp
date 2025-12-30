@@ -424,6 +424,10 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     std::vector<uint16_t> host_joint_logits_fp16(static_cast<size_t>(kJointVocabSize));
     std::vector<float> host_joint_logits_f32(static_cast<size_t>(kJointVocabSize));
 
+    auto last_partial_emit = std::chrono::steady_clock::now() - std::chrono::milliseconds(1000);
+    const auto partial_interval = std::chrono::milliseconds(100);
+    int last_emitted_count = 0;
+
     int time_idx = 0;
     while (time_idx < T_enc) {
       // Predictor: y (INT64)
@@ -497,6 +501,25 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       if (best_tok != kBlankId) {
         emitted.push_back(best_tok);
         y_id = best_tok;
+      }
+
+      // Emit partial hypothesis at most every ~100ms (best-effort).
+      // This is intentionally time-based to match UI cadence and avoid thrash.
+      if (std::chrono::steady_clock::now() - last_partial_emit >= partial_interval) {
+        // Only decode if something changed since last emit.
+        if (static_cast<int>(emitted.size()) != last_emitted_count) {
+          last_emitted_count = static_cast<int>(emitted.size());
+          ParakeetEvent pev{};
+          pev.type = PARAKEET_EVENT_PARTIAL_TEXT;
+          pev.segment_id = 0;
+          session->current_text = session->tokenizer->decode(emitted);
+          pev.text = session->current_text.c_str();
+          {
+            std::lock_guard<std::mutex> lock(session->event_mutex);
+            session->event_queue.push(pev);
+          }
+        }
+        last_partial_emit = std::chrono::steady_clock::now();
       }
 
       if (duration <= 0) {
