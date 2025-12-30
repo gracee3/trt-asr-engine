@@ -1,4 +1,4 @@
-# Parakeet TRT Prototype Tools
+# trt-asr-engine tools
 
 This directory contains the pipeline for converting a NeMo Parakeet-TDT model into TensorRT engines and verifying the results.
 

@@ -1,5 +1,6 @@
 .venv/
 models/
+!models/README.md
 tools/export_onnx/out/
 tools/build_trt/out/
 __pycache__/
