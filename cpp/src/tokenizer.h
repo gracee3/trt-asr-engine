@@ -1,31 +1,24 @@
 #ifndef TOKENIZER_H
 #define TOKENIZER_H
 
-#include <sentencepiece_processor.h>
 #include <string>
 #include <vector>
 
 class Tokenizer {
 public:
-    Tokenizer(const std::string& model_path) {
-        auto status = processor_.Load(model_path);
-        if (!status.ok()) {
-            throw std::runtime_error("Failed to load SentencePiece model: " + status.ToString());
-        }
-    }
+    // Minimal vocab-based decoder (no SentencePiece dependency).
+    // `vocab_path` should point to a `vocab.txt` where each line is a token string.
+    explicit Tokenizer(const std::string& vocab_path);
 
-    std::string decode(const std::vector<int>& ids) {
-        std::string text;
-        processor_.Decode(ids, &text);
-        return text;
-    }
+    // Decode SentencePiece-style pieces:
+    // - tokens starting with '▁' start a new word (space before the remainder)
+    // - special tokens like <pad> are ignored
+    std::string decode(const std::vector<int>& ids) const;
 
-    int get_blank_id() const {
-        return processor_.PieceToId("<blank>"); // Or from model_meta.json
-    }
+    int vocab_size() const { return static_cast<int>(vocab_.size()); }
 
 private:
-    sentencepiece::SentencePieceProcessor processor_;
+    std::vector<std::string> vocab_;
 };
 
 #endif

@@ -17,7 +17,7 @@ impl Default for FeatureConfig {
             n_fft: 512,
             win_length: 400, // 25ms
             hop_length: 160, // 10ms
-            n_mels: 80,
+            n_mels: 128,
             preemphasis: 0.97,
         }
     }
@@ -176,6 +176,6 @@ mod tests {
         
         // Expected frames: (16000 - 400) / 160 + 1 = 15600 / 160 + 1 = 97 + 1 = 98
         let expected_frames = (16000 - 400) / 160 + 1;
-        assert_eq!(features.len(), expected_frames * 80);
+        assert_eq!(features.len(), expected_frames * 128);
     }
 }

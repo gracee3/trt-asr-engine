@@ -7,6 +7,8 @@ fn main() {
     
     println!("cargo:rustc-link-lib=parakeet_trt");
     println!("cargo:rustc-link-search=native={}", cpp_dir.join("build").display());
+    // Ensure binaries can locate the shared library at runtime without requiring LD_LIBRARY_PATH.
+    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", cpp_dir.join("build").display());
 
     let bindings = bindgen::Builder::default()
         .header(cpp_dir.join("include/parakeet_trt.h").to_str().unwrap())

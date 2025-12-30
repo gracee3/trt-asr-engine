@@ -27,14 +27,40 @@ fn main() -> anyhow::Result<()> {
     // 1. Load Audio
     let mut reader = hound::WavReader::open(&args.wav_path)?;
     let spec = reader.spec();
-    if spec.sample_rate != 16000 || spec.channels != 1 || spec.sample_format != hound::SampleFormat::Float {
-        anyhow::bail!("WAV must be 16kHz mono f32");
+    if spec.sample_rate != 16000 || spec.channels != 1 {
+        anyhow::bail!("WAV must be 16kHz mono (got {} Hz, {} channels)", spec.sample_rate, spec.channels);
     }
-    let audio: Vec<f32> = reader.samples::<f32>().map(|s| s.unwrap()).collect();
+    let audio: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => reader.samples::<f32>().map(|s| s.unwrap()).collect(),
+        hound::SampleFormat::Int => {
+            // Normalize to [-1, 1] for common PCM bit depths.
+            let bits = spec.bits_per_sample;
+            if bits == 0 || bits > 32 {
+                anyhow::bail!("Unsupported PCM bit depth: {}", bits);
+            }
+            let denom = (1u64 << (bits - 1)) as f32;
+            reader
+                .samples::<i32>()
+                .map(|s| s.unwrap() as f32 / denom)
+                .collect()
+        }
+    };
 
     // 2. Setup Feature Extractor
     let config = FeatureConfig::default();
     let extractor = LogMelExtractor::new(config);
+    let n_mels = extractor.n_mels();
+
+    let to_bct = |feat_tc: &[f32], frames: usize| -> Vec<f32> {
+        // Input is [T, C] (frame-major), output is [C, T] (mel-major) to match encoder [B,C,T].
+        let mut out = vec![0.0f32; n_mels * frames];
+        for t in 0..frames {
+            for m in 0..n_mels {
+                out[m * frames + t] = feat_tc[t * n_mels + m];
+            }
+        }
+        out
+    };
 
     // 3. Setup Runtime
     let session = ParakeetSessionSafe::new(
@@ -54,11 +80,12 @@ fn main() -> anyhow::Result<()> {
             let end = (pos + samples_per_chunk).min(audio.len());
             let chunk = &audio[pos..end];
             
-            let features = extractor.compute(chunk);
-            let num_frames = features.len() / 80;
+            let features_tc = extractor.compute(chunk);
+            let num_frames = features_tc.len() / n_mels;
             
             if num_frames > 0 {
-                session.push_features(&features, num_frames)?;
+                let features_bct = to_bct(&features_tc, num_frames);
+                session.push_features(&features_bct, num_frames)?;
                 
                 // Poll for events
                 while let Some(event) = session.poll_event() {
@@ -83,9 +110,10 @@ fn main() -> anyhow::Result<()> {
         }
     } else {
         // Offline whole file
-        let features = extractor.compute(&audio);
-        let num_frames = features.len() / 80;
-        session.push_features(&features, num_frames)?;
+        let features_tc = extractor.compute(&audio);
+        let num_frames = features_tc.len() / n_mels;
+        let features_bct = to_bct(&features_tc, num_frames);
+        session.push_features(&features_bct, num_frames)?;
         
         while let Some(event) = session.poll_event() {
             match event {
