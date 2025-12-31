@@ -481,6 +481,14 @@ void parakeet_reset_utterance(ParakeetSession* session) {
     prime_token(session->tok_lang);
     session->y_id = session->tok_lang;
   }
+  if (session->tok_nopnc >= 0) {
+    prime_token(session->tok_nopnc);
+    session->y_id = session->tok_nopnc;
+  }
+  if (session->tok_noitn >= 0) {
+    prime_token(session->tok_noitn);
+    session->y_id = session->tok_noitn;
+  }
   // NOTE: We do NOT force y_id to blank here anymore.
   // The decode loop uses cached predictor_output `g` and only runs predictor on non-blank emissions.
 
@@ -646,22 +654,27 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         // Token argmax over [0..kTokenVocabSize)
         int best_tok = 0;
         float best_tok_v = session->host_joint_logits_f32[0];
+        int second_tok = -1;
+        float second_tok_v = -1.0e9f;
         for (int32_t i = 1; i < kTokenVocabSize; ++i) {
           const float v = session->host_joint_logits_f32[static_cast<size_t>(i)];
           if (v > best_tok_v) {
+            second_tok = best_tok;
+            second_tok_v = best_tok_v;
             best_tok_v = v;
             best_tok = i;
+          } else if (v > second_tok_v) {
+            second_tok = i;
+            second_tok_v = v;
           }
         }
-
-        // Heuristic (debug-mode, evidence-driven):
-        // If the first emission of a chunk is '.', treat it like blank.
-        // (We still allow '.' later in the chunk; we just avoid '.'-only chunks dominating output.)
-        bool suppress_punct = false;
-        if (best_tok == 7883 && emitted.empty()) { // '.'
-          suppress_punct = true;
-          best_tok = kBlankId;
+        // If blank barely wins, prefer the second-best token to avoid all-blank outputs.
+        if (best_tok == kBlankId && second_tok >= 0 && (best_tok_v - second_tok_v) < 0.3f) {
+          best_tok = second_tok;
+          best_tok_v = second_tok_v;
         }
+
+        bool suppress_punct = false;
 
         // Duration argmax over tail [kTokenVocabSize..kJointVocabSize)
         int best_dur_idx = 0;
@@ -770,10 +783,9 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     //
     // Evidence-driven fix:
     // Carrying the last emitted token id across chunk boundaries is unstable and can cause "one update then silence".
-    // The joint uses cached predictor output `g` (and h/c are streaming), so `y_id` is not required across chunks.
-    // Always restart the chunk-visible `y_id` from blank.
-    const int32_t y_id_out = kBlankId;
-    const bool cleared_punct_state = (y_id != kBlankId);
+    // Preserve the last emitted token across chunks for continuity.
+    const int32_t y_id_out = y_id;
+    const bool cleared_punct_state = false;
     session->y_id = y_id_out;
 
     // #region agent log
