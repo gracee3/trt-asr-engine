@@ -296,6 +296,9 @@ struct ParakeetSession {
   int32_t tok_nopnc = -1;  // e.g. <|nopnc|>
   int32_t tok_noitn = -1;  // e.g. <|noitn|>
 
+  // Streaming decode state: last token id fed into predictor (carried across push_features calls).
+  int32_t y_id = kBlankId;
+
   // Predictor state buffers (device pointers).
   void* d_h = nullptr;
   void* d_c = nullptr;
@@ -410,6 +413,16 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
     session->d_joint_pred_in = session->joint.tensors["predictor_output"];
     session->d_joint_out = session->joint.tensors["joint_output"];
 
+    // Initialize utterance state once (reset + prompt priming).
+    parakeet_reset_utterance(session.get());
+    // #region agent log
+    dbglog_ndjson(
+        "H14",
+        "cpp/src/parakeet_trt.cpp:parakeet_create_session:init",
+        "Session primed (streaming)",
+        std::string("{\"y_id\":") + std::to_string(session->y_id) + "}");
+    // #endregion
+
     return session.release();
   } catch (const std::exception& e) {
     std::cerr << "Failed to create session: " << e.what() << std::endl;
@@ -432,6 +445,45 @@ void parakeet_reset_utterance(ParakeetSession* session) {
   // Reset predictor state to zeros.
   cuda_check(cudaMemsetAsync(session->d_h, 0, kPredLayers * 1 * kPredDim * 2, session->stream), "cudaMemsetAsync(h)");
   cuda_check(cudaMemsetAsync(session->d_c, 0, kPredLayers * 1 * kPredDim * 2, session->stream), "cudaMemsetAsync(c)");
+
+  // Prime predictor with NeMo-style prompt tokens once per utterance.
+  // This seeds h/c and initializes y_id so decoding can continue across push_features calls.
+  auto prime_token = [&](int32_t tok) {
+    if (tok < 0) return;
+    const int64_t host_y = static_cast<int64_t>(tok);
+    cuda_check(cudaMemcpyAsync(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream),
+               "cudaMemcpyAsync(y_prime)");
+    enqueue_or_throw(session->pred, session->stream);
+    cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_prime)");
+    const size_t h_bytes = volume(session->pred.ctx->getTensorShape("h")) * dtype_size(session->pred.engine->getTensorDataType("h"));
+    const size_t c_bytes = volume(session->pred.ctx->getTensorShape("c")) * dtype_size(session->pred.engine->getTensorDataType("c"));
+    const size_t g_bytes = volume(session->pred.ctx->getTensorShape("g")) * dtype_size(session->pred.engine->getTensorDataType("g"));
+    cuda_check(cudaMemcpyAsync(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream),
+               "cudaMemcpyAsync(h_out->h_prime)");
+    cuda_check(cudaMemcpyAsync(session->d_c, session->d_c_out, c_bytes, cudaMemcpyDeviceToDevice, session->stream),
+               "cudaMemcpyAsync(c_out->c_prime)");
+    // Cache predictor output for the joint (so we don't need to rerun predictor on blank steps).
+    cuda_check(cudaMemcpyAsync(session->d_joint_pred_in, session->d_g, g_bytes, cudaMemcpyDeviceToDevice, session->stream),
+               "cudaMemcpyAsync(g->joint.predictor_output_prime)");
+    cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_prime_copy)");
+  };
+
+  // Start token first, then language token.
+  // NOTE: We intentionally do NOT apply optional constraint tokens here (e.g. <|nopnc|>, <|noitn|>)
+  // because in observed runs they bias decoding toward '.' spam ("pe...........") rather than real text.
+  if (session->tok_start >= 0) {
+    prime_token(session->tok_start);
+    session->y_id = session->tok_start;
+  } else {
+    session->y_id = kBlankId;
+  }
+  if (session->tok_lang >= 0) {
+    prime_token(session->tok_lang);
+    session->y_id = session->tok_lang;
+  }
+  // NOTE: We do NOT force y_id to blank here anymore.
+  // The decode loop uses cached predictor_output `g` and only runs predictor on non-blank emissions.
+
   std::lock_guard<std::mutex> lock(session->event_mutex);
   while (!session->event_queue.empty()) session->event_queue.pop();
 }
@@ -445,12 +497,9 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         "H8",
         "cpp/src/parakeet_trt.cpp:parakeet_push_features:entry",
         "push_features called",
-        std::string("{\"num_frames\":") + std::to_string(num_frames) + "}");
+        std::string("{\"num_frames\":") + std::to_string(num_frames) +
+            ",\"y_id_in\":" + std::to_string(session->y_id) + "}");
     // #endregion
-
-    // Reset utterance state per chunk. This demo runtime is chunk-scoped; carrying h/c across calls
-    // while also replaying prompt tokens tends to trap decoding in blank.
-    parakeet_reset_utterance(session);
 
     // Encoder engines are currently profiled for 16..256 frames.
     if (num_frames > 256) {
@@ -531,9 +580,16 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
 
 
-    // Greedy TDT decode loop using joint slices (T=16) due to engine min profile.
-    // Prime the predictor with NeMo-style prompt tokens if present, otherwise fall back to blank.
-    int32_t y_id = (session->tok_start >= 0 ? session->tok_start : kBlankId);
+    // Greedy TDT/RNNT decode loop using joint slices (T=16) due to engine min profile.
+    //
+    // IMPORTANT semantics:
+    // - Predictor runs ONLY when a non-blank token is emitted (u increments).
+    // - When joint predicts blank, we advance encoder time but keep the same predictor output `g`
+    //   (stored in `session->d_joint_pred_in`).
+    //
+    // `session->y_id` is tracked as "last emitted token id" for visibility/logging.
+    int32_t y_id = session->y_id;
+    if (y_id < 0) y_id = kBlankId;
     std::vector<int> emitted;
     emitted.reserve(static_cast<size_t>(T_enc));
 
@@ -546,58 +602,11 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     const auto partial_interval = std::chrono::milliseconds(100);
     int last_emitted_count = 0;
 
-    // Predictor priming: run predictor on prompt tokens to seed h/c state (no encoder consumed).
-    auto prime_token = [&](int32_t tok) {
-      if (tok < 0) return;
-      const int64_t host_y = static_cast<int64_t>(tok);
-      cuda_check(cudaMemcpyAsync(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream),
-                 "cudaMemcpyAsync(y_prime)");
-      enqueue_or_throw(session->pred, session->stream);
-      cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_prime)");
-      const size_t h_bytes = volume(session->pred.ctx->getTensorShape("h")) * dtype_size(session->pred.engine->getTensorDataType("h"));
-      const size_t c_bytes = volume(session->pred.ctx->getTensorShape("c")) * dtype_size(session->pred.engine->getTensorDataType("c"));
-      cuda_check(cudaMemcpyAsync(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream),
-                 "cudaMemcpyAsync(h_out->h_prime)");
-      cuda_check(cudaMemcpyAsync(session->d_c, session->d_c_out, c_bytes, cudaMemcpyDeviceToDevice, session->stream),
-                 "cudaMemcpyAsync(c_out->c_prime)");
-      cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_prime_copy)");
-    };
-
-    if (session->tok_start >= 0) {
-      prime_token(session->tok_start);
-    }
-    if (session->tok_lang >= 0) {
-      prime_token(session->tok_lang);
-      y_id = session->tok_lang;
-    }
-    if (session->tok_nopnc >= 0) {
-      prime_token(session->tok_nopnc);
-      y_id = session->tok_nopnc;
-    }
-    if (session->tok_noitn >= 0) {
-      prime_token(session->tok_noitn);
-      y_id = session->tok_noitn;
-    }
-
     int time_idx = 0;
     int dbg_steps = 0;
+    const int max_symbols_per_timestep = 8;  // safety cap to avoid infinite loops
     while (time_idx < T_enc) {
-      // Predictor: y (INT64)
-      const int64_t host_y = static_cast<int64_t>(y_id);
-      cuda_check(cudaMemcpyAsync(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream),
-                 "cudaMemcpyAsync(y)");
-      enqueue_or_throw(session->pred, session->stream);
-      cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor)");
-
-      // Copy h_out/c_out back into h/c for next step.
-      const size_t h_bytes = volume(session->pred.ctx->getTensorShape("h")) * dtype_size(session->pred.engine->getTensorDataType("h"));
-      const size_t c_bytes = volume(session->pred.ctx->getTensorShape("c")) * dtype_size(session->pred.engine->getTensorDataType("c"));
-      cuda_check(cudaMemcpyAsync(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream),
-                 "cudaMemcpyAsync(h_out->h)");
-      cuda_check(cudaMemcpyAsync(session->d_c, session->d_c_out, c_bytes, cudaMemcpyDeviceToDevice, session->stream),
-                 "cudaMemcpyAsync(c_out->c)");
-
-      // Prepare joint encoder slice: replicate encoder frame across T=16.
+      // Prepare joint encoder slice once per encoder timestep (replicate frame across T=16 to satisfy profile).
       for (int32_t c = 0; c < kEncDim; ++c) {
         const float v = host_enc_out_f32[static_cast<size_t>(c) * static_cast<size_t>(T_enc) + static_cast<size_t>(time_idx)];
         const size_t base = static_cast<size_t>(c) * static_cast<size_t>(kTrtChunkT);
@@ -613,99 +622,128 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         cuda_check(cudaMemcpyAsync(session->d_joint_enc_in, host_joint_enc_slice_f32.data(), host_joint_enc_slice_f32.size() * 4, cudaMemcpyHostToDevice, session->stream), "cudaMemcpyAsync(joint.enc)");
       }
 
-      // Wire predictor_output from predictor engine directly into joint by copying g -> joint predictor input.
-      const size_t g_bytes = volume(session->pred.ctx->getTensorShape("g")) * dtype_size(session->pred.engine->getTensorDataType("g"));
-      cuda_check(cudaMemcpyAsync(session->d_joint_pred_in, session->d_g, g_bytes, cudaMemcpyDeviceToDevice, session->stream),
-                 "cudaMemcpyAsync(g->joint.predictor_output)");
+      for (int u = 0; u < max_symbols_per_timestep && time_idx < T_enc; ++u) {
+        // Run joint using the cached predictor output `g` (session->d_joint_pred_in).
+        enqueue_or_throw(session->joint, session->stream);
+        cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(joint)");
 
-      // Run joint.
-      enqueue_or_throw(session->joint, session->stream);
-      cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(joint)");
-
-      // Copy logits for first timestep (t=0,u=0) to host.
-      if (joint_out_dt == nvinfer1::DataType::kHALF) {
-        cuda_check(cudaMemcpyAsync(session->host_joint_logits_fp16.data(), session->d_joint_out, session->host_joint_logits_fp16.size() * 2, cudaMemcpyDeviceToHost, session->stream), "cudaMemcpyAsync(joint_out_fp16)");
-        cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_out");
-        for (size_t i = 0; i < session->host_joint_logits_f32.size(); ++i) {
-          float f = fp16_to_f32(session->host_joint_logits_fp16[i]);
-          session->host_joint_logits_f32[i] = std::isnan(f) ? -100.0f : f;
-        }
-      } else {
-        cuda_check(cudaMemcpyAsync(session->host_joint_logits_f32.data(), session->d_joint_out, session->host_joint_logits_f32.size() * 4, cudaMemcpyDeviceToHost, session->stream), "cudaMemcpyAsync(joint_out_f32)");
-        cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_out");
-        for (size_t i = 0; i < session->host_joint_logits_f32.size(); ++i) {
-          if (std::isnan(session->host_joint_logits_f32[i])) session->host_joint_logits_f32[i] = -100.0f;
-        }
-      }
-
-      // Token argmax over [0..kTokenVocabSize)
-      int best_tok = 0;
-      float best_tok_v = session->host_joint_logits_f32[0];
-      for (int32_t i = 1; i < kTokenVocabSize; ++i) {
-        const float v = session->host_joint_logits_f32[static_cast<size_t>(i)];
-        if (v > best_tok_v) {
-          best_tok_v = v;
-          best_tok = i;
-        }
-      }
-
-      // Duration argmax over tail [kTokenVocabSize..kJointVocabSize)
-      int best_dur_idx = 0;
-      float best_dur_v = session->host_joint_logits_f32[static_cast<size_t>(kTokenVocabSize)];
-      for (int32_t i = 1; i < kNumDurations; ++i) {
-        const float v = session->host_joint_logits_f32[static_cast<size_t>(kTokenVocabSize + i)];
-        if (v > best_dur_v) {
-          best_dur_v = v;
-          best_dur_idx = i;
-        }
-      }
-      const int duration = kDurationValues[best_dur_idx];
-
-      // #region agent log
-      if (dbg_steps < 12) {
-        dbg_steps++;
-        dbglog_ndjson(
-            "H8",
-            "cpp/src/parakeet_trt.cpp:parakeet_push_features:decode_step",
-            "Decode step decision",
-            std::string("{\"time_idx\":") + std::to_string(time_idx) +
-                ",\"y_id\":" + std::to_string(y_id) +
-                ",\"best_tok\":" + std::to_string(best_tok) +
-                ",\"best_tok_v\":" + std::to_string(best_tok_v) +
-                ",\"is_blank\":" + std::string(best_tok == kBlankId ? "true" : "false") +
-                ",\"best_dur_idx\":" + std::to_string(best_dur_idx) +
-                ",\"duration\":" + std::to_string(duration) + "}");
-      }
-      // #endregion
-
-      if (best_tok != kBlankId) {
-        emitted.push_back(best_tok);
-        y_id = best_tok;
-        // std::cout << "[STT] Emit \"" << session->tokenizer->decode({best_tok}) << "\" (logit=" << best_tok_v << ")" << std::endl;
-      }
-
-      // Emit partial hypothesis at most every ~100ms (best-effort).
-      // This is intentionally time-based to match UI cadence and avoid thrash.
-      if (std::chrono::steady_clock::now() - last_partial_emit >= partial_interval) {
-        // Only decode if something changed since last emit.
-        if (static_cast<int>(emitted.size()) != last_emitted_count) {
-          last_emitted_count = static_cast<int>(emitted.size());
-          ParakeetEventInternal pev{};
-          pev.type = PARAKEET_EVENT_PARTIAL_TEXT;
-          pev.segment_id = 0;
-          pev.text = session->tokenizer->decode(emitted);
-          {
-            std::lock_guard<std::mutex> lock(session->event_mutex);
-            session->event_queue.push(std::move(pev));
+        // Copy logits for (t=0,u=0) to host.
+        if (joint_out_dt == nvinfer1::DataType::kHALF) {
+          cuda_check(cudaMemcpyAsync(session->host_joint_logits_fp16.data(), session->d_joint_out, session->host_joint_logits_fp16.size() * 2, cudaMemcpyDeviceToHost, session->stream), "cudaMemcpyAsync(joint_out_fp16)");
+          cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_out");
+          for (size_t i = 0; i < session->host_joint_logits_f32.size(); ++i) {
+            float f = fp16_to_f32(session->host_joint_logits_fp16[i]);
+            session->host_joint_logits_f32[i] = std::isnan(f) ? -100.0f : f;
+          }
+        } else {
+          cuda_check(cudaMemcpyAsync(session->host_joint_logits_f32.data(), session->d_joint_out, session->host_joint_logits_f32.size() * 4, cudaMemcpyDeviceToHost, session->stream), "cudaMemcpyAsync(joint_out_f32)");
+          cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_out");
+          for (size_t i = 0; i < session->host_joint_logits_f32.size(); ++i) {
+            if (std::isnan(session->host_joint_logits_f32[i])) session->host_joint_logits_f32[i] = -100.0f;
           }
         }
-        last_partial_emit = std::chrono::steady_clock::now();
-      }
 
-      if (duration <= 0) {
-        time_idx += 1;
-      } else {
-        time_idx += duration;
+        // Token argmax over [0..kTokenVocabSize)
+        int best_tok = 0;
+        float best_tok_v = session->host_joint_logits_f32[0];
+        for (int32_t i = 1; i < kTokenVocabSize; ++i) {
+          const float v = session->host_joint_logits_f32[static_cast<size_t>(i)];
+          if (v > best_tok_v) {
+            best_tok_v = v;
+            best_tok = i;
+          }
+        }
+
+        // Heuristic (debug-mode, evidence-driven):
+        // If the first emission of a chunk is '.', treat it like blank.
+        // (We still allow '.' later in the chunk; we just avoid '.'-only chunks dominating output.)
+        bool suppress_punct = false;
+        if (best_tok == 7883 && emitted.empty()) { // '.'
+          suppress_punct = true;
+          best_tok = kBlankId;
+        }
+
+        // Duration argmax over tail [kTokenVocabSize..kJointVocabSize)
+        int best_dur_idx = 0;
+        float best_dur_v = session->host_joint_logits_f32[static_cast<size_t>(kTokenVocabSize)];
+        for (int32_t i = 1; i < kNumDurations; ++i) {
+          const float v = session->host_joint_logits_f32[static_cast<size_t>(kTokenVocabSize + i)];
+          if (v > best_dur_v) {
+            best_dur_v = v;
+            best_dur_idx = i;
+          }
+        }
+        const int duration = kDurationValues[best_dur_idx];
+        // Evidence-driven experiment: duration head behavior appears to over-skip encoder time and suppress
+        // meaningful emissions (we saw frequent duration=4 and almost no tokens). For now, always advance
+        // by 1 on blank so we evaluate each encoder timestep. Keep logging duration for analysis.
+        const int advance = 1;
+
+        // #region agent log
+        if (dbg_steps < 18) {
+          dbg_steps++;
+          dbglog_ndjson(
+              "H15",
+              "cpp/src/parakeet_trt.cpp:parakeet_push_features:decode_step_v2",
+              "Decode step decision (v2)",
+              std::string("{\"time_idx\":") + std::to_string(time_idx) +
+                  ",\"u\":" + std::to_string(u) +
+                  ",\"y_id\":" + std::to_string(y_id) +
+                  ",\"best_tok\":" + std::to_string(best_tok) +
+                  ",\"best_tok_v\":" + std::to_string(best_tok_v) +
+                  ",\"is_blank\":" + std::string(best_tok == kBlankId ? "true" : "false") +
+                  ",\"suppressed_punct\":" + std::string(suppress_punct ? "true" : "false") +
+                  ",\"best_dur_idx\":" + std::to_string(best_dur_idx) +
+                  ",\"duration\":" + std::to_string(duration) +
+                  ",\"advance\":" + std::to_string(advance) + "}");
+        }
+        // #endregion
+
+        if (best_tok != kBlankId) {
+          emitted.push_back(best_tok);
+          // Predictor update (ONLY on non-blank token): y=best_tok, update h/c and refresh cached `g`.
+          const size_t h_bytes = volume(session->pred.ctx->getTensorShape("h")) * dtype_size(session->pred.engine->getTensorDataType("h"));
+          const size_t c_bytes = volume(session->pred.ctx->getTensorShape("c")) * dtype_size(session->pred.engine->getTensorDataType("c"));
+          const size_t g_bytes = volume(session->pred.ctx->getTensorShape("g")) * dtype_size(session->pred.engine->getTensorDataType("g"));
+
+          const int64_t host_y = static_cast<int64_t>(best_tok);
+          cuda_check(cudaMemcpyAsync(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream),
+                     "cudaMemcpyAsync(y)");
+          enqueue_or_throw(session->pred, session->stream);
+          cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor)");
+
+          cuda_check(cudaMemcpyAsync(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream),
+                     "cudaMemcpyAsync(h_out->h)");
+          cuda_check(cudaMemcpyAsync(session->d_c, session->d_c_out, c_bytes, cudaMemcpyDeviceToDevice, session->stream),
+                     "cudaMemcpyAsync(c_out->c)");
+          cuda_check(cudaMemcpyAsync(session->d_joint_pred_in, session->d_g, g_bytes, cudaMemcpyDeviceToDevice, session->stream),
+                     "cudaMemcpyAsync(g->joint.predictor_output)");
+          cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_commit)");
+
+          y_id = best_tok;
+          continue;  // stay on the same encoder timestep, try emitting more symbols
+        }
+
+        // Blank: advance encoder time using duration head.
+        time_idx += advance;
+
+        // Emit partial hypothesis at most every ~100ms (best-effort).
+        if (std::chrono::steady_clock::now() - last_partial_emit >= partial_interval) {
+          if (static_cast<int>(emitted.size()) != last_emitted_count) {
+            last_emitted_count = static_cast<int>(emitted.size());
+            ParakeetEventInternal pev{};
+            pev.type = PARAKEET_EVENT_PARTIAL_TEXT;
+            pev.segment_id = 0;
+            pev.text = session->tokenizer->decode(emitted);
+            {
+              std::lock_guard<std::mutex> lock(session->event_mutex);
+              session->event_queue.push(std::move(pev));
+            }
+          }
+          last_partial_emit = std::chrono::steady_clock::now();
+        }
+
+        break;  // move to next encoder time window
       }
     }
 
@@ -726,6 +764,25 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         "Final event queued",
         std::string("{\"emitted_ct\":") + std::to_string(emitted.size()) +
             ",\"decoded_len\":" + std::to_string(session->event_queue.back().text.size()) + "}");
+    // #endregion
+
+    // Persist streaming predictor token id for the next chunk.
+    //
+    // Evidence-driven fix:
+    // Carrying the last emitted token id across chunk boundaries is unstable and can cause "one update then silence".
+    // The joint uses cached predictor output `g` (and h/c are streaming), so `y_id` is not required across chunks.
+    // Always restart the chunk-visible `y_id` from blank.
+    const int32_t y_id_out = kBlankId;
+    const bool cleared_punct_state = (y_id != kBlankId);
+    session->y_id = y_id_out;
+
+    // #region agent log
+    dbglog_ndjson(
+        "H18",
+        "cpp/src/parakeet_trt.cpp:parakeet_push_features:y_id_out",
+        "Persisted y_id for next chunk",
+        std::string("{\"y_id_out\":") + std::to_string(y_id_out) +
+            ",\"cleared_punct_state\":" + std::string(cleared_punct_state ? "true" : "false") + "}");
     // #endregion
 
     return 0;
