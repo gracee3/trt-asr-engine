@@ -94,8 +94,10 @@ impl LogMelExtractor {
                 for (i, &weight) in mel_bin.iter().enumerate() {
                     energy += power_spec[i] * weight;
                 }
-                // Log compression (with small epsilon to avoid log(0))
-                let log_energy = (energy + 1e-6).ln();
+                // Log compression (with small epsilon to avoid log(0)).
+                // NeMo-style feature pipelines commonly use 1e-5 here; 1e-6 floors at ln(1e-6)=-13.815,
+                // which we've observed showing up as a hard minimum in runtime logs.
+                let log_energy = (energy + 1e-5).ln();
                 features.push(log_energy);
             }
 
