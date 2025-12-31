@@ -51,6 +51,14 @@ float get_blank_penalty() {
   }
 }
 
+bool get_debug_topk() {
+  const char* v = std::getenv("PARAKEET_DEBUG_TOPK");
+  if (!v || !*v) {
+    return false;
+  }
+  return std::string(v) == "1";
+}
+
 class Logger final : public nvinfer1::ILogger {
  public:
   void log(Severity severity, const char* msg) noexcept override {
@@ -686,6 +694,47 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           suppress_punct = true;
           best_tok = kBlankId;
           best_tok_v = session->host_joint_logits_f32[static_cast<size_t>(kBlankId)];
+        }
+
+        if (get_debug_topk() && u == 0 &&
+            (time_idx == 0 || time_idx == (T_enc / 2) || time_idx + 1 == T_enc)) {
+          const int k = 5;
+          int top_ids[k] = {0};
+          float top_vals[k];
+          for (int i = 0; i < k; ++i) top_vals[i] = -1.0e9f;
+          for (int32_t i = 0; i < kTokenVocabSize; ++i) {
+            const float v = session->host_joint_logits_f32[static_cast<size_t>(i)];
+            int insert = -1;
+            for (int j = 0; j < k; ++j) {
+              if (v > top_vals[j]) {
+                insert = j;
+                break;
+              }
+            }
+            if (insert >= 0) {
+              for (int j = k - 1; j > insert; --j) {
+                top_vals[j] = top_vals[j - 1];
+                top_ids[j] = top_ids[j - 1];
+              }
+              top_vals[insert] = v;
+              top_ids[insert] = i;
+            }
+          }
+          std::string topk = "[";
+          for (int j = 0; j < k; ++j) {
+            if (j) topk += ",";
+            topk += "{\"id\":" + std::to_string(top_ids[j]) +
+                    ",\"v\":" + std::to_string(top_vals[j]) + "}";
+          }
+          topk += "]";
+          dbglog_ndjson(
+              "H15",
+              "cpp/src/parakeet_trt.cpp:parakeet_push_features:topk",
+              "Top-k logits (pre-decode)",
+              std::string("{\"time_idx\":") + std::to_string(time_idx) +
+                  ",\"t_enc\":" + std::to_string(T_enc) +
+                  ",\"blank_logit\":" + std::to_string(session->host_joint_logits_f32[static_cast<size_t>(kBlankId)]) +
+                  ",\"topk\":" + topk + "}");
         }
 
         // Duration argmax over tail [kTokenVocabSize..kJointVocabSize)

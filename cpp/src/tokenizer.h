@@ -18,6 +18,9 @@ public:
     // True if token is punctuation-only (no alnum), ignoring special tokens and SP whitespace marker.
     bool is_punct_only(int id) const;
 
+    // Return the raw vocab token string (or empty if out of range).
+    const std::string& token_at(int id) const;
+
     int vocab_size() const { return static_cast<int>(vocab_.size()); }
 
 private:

@@ -82,3 +82,9 @@ bool Tokenizer::is_punct_only(int id) const {
   }
   return any_non_space && !any_alnum;
 }
+
+const std::string& Tokenizer::token_at(int id) const {
+  static const std::string empty;
+  if (id < 0 || static_cast<size_t>(id) >= vocab_.size()) return empty;
+  return vocab_[static_cast<size_t>(id)];
+}
