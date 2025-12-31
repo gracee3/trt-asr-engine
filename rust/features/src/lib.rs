@@ -18,7 +18,8 @@ impl Default for FeatureConfig {
             win_length: 400, // 25ms
             hop_length: 160, // 10ms
             n_mels: 128,
-            preemphasis: 0.97,
+            // NeMo `AudioToMelSpectrogramPreprocessor` (used by this Parakeet checkpoint) does not apply pre-emphasis.
+            preemphasis: 0.0,
         }
     }
 }

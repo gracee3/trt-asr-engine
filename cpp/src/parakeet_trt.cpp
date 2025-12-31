@@ -17,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <atomic>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -47,6 +48,31 @@ class Logger final : public nvinfer1::ILogger {
 };
 
 static Logger gLogger;
+
+// #region agent log
+static std::atomic<int> g_dbg_n{0};
+static void dbglog_ndjson(const char* hypothesisId,
+                          const char* location,
+                          const char* message,
+                          const std::string& data_json) {
+  // NOTE: debug mode log path (do not include secrets).
+  const char* kLogPath = "/home/emmy/git/parakeet/.cursor/debug.log";
+  // Gate to avoid log spam.
+  const int n = g_dbg_n.fetch_add(1, std::memory_order_relaxed);
+  if (n > 120) return;
+
+  const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::system_clock::now().time_since_epoch())
+                          .count();
+
+  std::ofstream f(kLogPath, std::ios::out | std::ios::app);
+  if (!f) return;
+  f << "{\"sessionId\":\"debug-session\",\"runId\":\"cpp\",\"hypothesisId\":\""
+    << hypothesisId << "\",\"location\":\"" << location << "\",\"message\":\""
+    << message << "\",\"data\":" << data_json << ",\"timestamp\":" << now_ms
+    << "}\n";
+}
+// #endregion
 
 struct TrtDeleter {
   template <typename T>
@@ -379,6 +405,14 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
   if (!session || !features_bct_f32) return -1;
   if (num_frames == 0) return 0;
   try {
+    // #region agent log
+    dbglog_ndjson(
+        "H8",
+        "cpp/src/parakeet_trt.cpp:parakeet_push_features:entry",
+        "push_features called",
+        std::string("{\"num_frames\":") + std::to_string(num_frames) + "}");
+    // #endregion
+
     // Encoder engines are currently profiled for 16..256 frames.
     if (num_frames > 256) {
       throw std::runtime_error("num_frames exceeds encoder profile max (256) for this demo runtime");
@@ -434,6 +468,15 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     const int32_t T_enc = static_cast<int32_t>(enc_len_host);
     if (T_enc <= 0 || T_enc > T_shape) throw std::runtime_error("Invalid encoded_lengths from encoder");
 
+    // #region agent log
+    dbglog_ndjson(
+        "H8",
+        "cpp/src/parakeet_trt.cpp:parakeet_push_features:enc",
+        "Encoded lengths",
+        std::string("{\"T_valid\":") + std::to_string(T_valid) + ",\"T_shape\":" +
+            std::to_string(T_shape) + ",\"T_enc\":" + std::to_string(T_enc) + "}");
+    // #endregion
+
     // Copy encoder output to host once for decoding.
     nvinfer1::DataType enc_out_dt = session->enc.engine->getTensorDataType("encoder_output");
     std::vector<float> host_enc_out_f32(static_cast<size_t>(kEncDim) * static_cast<size_t>(T_enc));
@@ -464,6 +507,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     int last_emitted_count = 0;
 
     int time_idx = 0;
+    int dbg_steps = 0;
     while (time_idx < T_enc) {
       // Predictor: y (INT64)
       const int64_t host_y = static_cast<int64_t>(y_id);
@@ -544,6 +588,23 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       }
       const int duration = kDurationValues[best_dur_idx];
 
+      // #region agent log
+      if (dbg_steps < 12) {
+        dbg_steps++;
+        dbglog_ndjson(
+            "H8",
+            "cpp/src/parakeet_trt.cpp:parakeet_push_features:decode_step",
+            "Decode step decision",
+            std::string("{\"time_idx\":") + std::to_string(time_idx) +
+                ",\"y_id\":" + std::to_string(y_id) +
+                ",\"best_tok\":" + std::to_string(best_tok) +
+                ",\"best_tok_v\":" + std::to_string(best_tok_v) +
+                ",\"is_blank\":" + std::string(best_tok == kBlankId ? "true" : "false") +
+                ",\"best_dur_idx\":" + std::to_string(best_dur_idx) +
+                ",\"duration\":" + std::to_string(duration) + "}");
+      }
+      // #endregion
+
       if (best_tok != kBlankId) {
         emitted.push_back(best_tok);
         y_id = best_tok;
@@ -584,6 +645,15 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       ev.text = session->tokenizer->decode(emitted);
       session->event_queue.push(std::move(ev));
     }
+
+    // #region agent log
+    dbglog_ndjson(
+        "H8",
+        "cpp/src/parakeet_trt.cpp:parakeet_push_features:final",
+        "Final event queued",
+        std::string("{\"emitted_ct\":") + std::to_string(emitted.size()) +
+            ",\"decoded_len\":" + std::to_string(session->event_queue.back().text.size()) + "}");
+    // #endregion
 
     return 0;
   } catch (const std::exception& e) {
