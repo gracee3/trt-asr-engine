@@ -15,6 +15,9 @@ public:
     // - special tokens like <pad> are ignored
     std::string decode(const std::vector<int>& ids) const;
 
+    // True if token is punctuation-only (no alnum), ignoring special tokens and SP whitespace marker.
+    bool is_punct_only(int id) const;
+
     int vocab_size() const { return static_cast<int>(vocab_.size()); }
 
 private:

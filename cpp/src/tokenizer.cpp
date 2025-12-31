@@ -1,6 +1,7 @@
 #include "tokenizer.h"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -53,4 +54,31 @@ std::string Tokenizer::decode(const std::vector<int>& ids) const {
   // Trim leading spaces.
   while (!out.empty() && out.front() == ' ') out.erase(out.begin());
   return out;
+}
+
+bool Tokenizer::is_punct_only(int id) const {
+  if (id < 0 || static_cast<size_t>(id) >= vocab_.size()) return false;
+  const std::string& tok = vocab_[static_cast<size_t>(id)];
+  if (is_special_token(tok)) return false;
+
+  size_t start = 0;
+  if (tok.size() >= 3 && (unsigned char)tok[0] == 0xE2 && (unsigned char)tok[1] == 0x96 &&
+      (unsigned char)tok[2] == 0x81) {
+    start = 3;
+  }
+  if (start >= tok.size()) return false;
+
+  bool any_alnum = false;
+  bool any_non_space = false;
+  for (size_t i = start; i < tok.size(); ++i) {
+    unsigned char c = static_cast<unsigned char>(tok[i]);
+    if (std::isalnum(c)) {
+      any_alnum = true;
+      break;
+    }
+    if (!std::isspace(c)) {
+      any_non_space = true;
+    }
+  }
+  return any_non_space && !any_alnum;
 }

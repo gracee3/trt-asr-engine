@@ -494,14 +494,7 @@ void parakeet_reset_utterance(ParakeetSession* session) {
     prime_token(session->tok_lang);
     session->y_id = session->tok_lang;
   }
-  if (session->tok_nopnc >= 0) {
-    prime_token(session->tok_nopnc);
-    session->y_id = session->tok_nopnc;
-  }
-  if (session->tok_noitn >= 0) {
-    prime_token(session->tok_noitn);
-    session->y_id = session->tok_noitn;
-  }
+  // Optional constraint tokens intentionally skipped; they bias decoding toward "." spam ("pe...").
   // NOTE: We do NOT force y_id to blank here anymore.
   // The decode loop uses cached predictor_output `g` and only runs predictor on non-blank emissions.
 
@@ -688,6 +681,12 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         // No forced substitution: use blank penalty via env var instead.
 
         bool suppress_punct = false;
+        // Suppress leading punctuation-only emission; it can poison y_id and stall decoding on some utterances.
+        if (emitted.empty() && session->tokenizer && session->tokenizer->is_punct_only(best_tok)) {
+          suppress_punct = true;
+          best_tok = kBlankId;
+          best_tok_v = session->host_joint_logits_f32[static_cast<size_t>(kBlankId)];
+        }
 
         // Duration argmax over tail [kTokenVocabSize..kJointVocabSize)
         int best_dur_idx = 0;
