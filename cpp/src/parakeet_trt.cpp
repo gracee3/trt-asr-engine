@@ -74,6 +74,19 @@ static void dbglog_ndjson(const char* hypothesisId,
 }
 // #endregion
 
+static int find_token_id_in_vocab_txt(const std::string& vocab_path, const std::string& token) {
+  std::ifstream f(vocab_path);
+  if (!f) return -1;
+  std::string line;
+  int idx = 0;
+  while (std::getline(f, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line == token) return idx;
+    idx++;
+  }
+  return -1;
+}
+
 struct TrtDeleter {
   template <typename T>
   void operator()(T* p) const noexcept {
@@ -278,6 +291,10 @@ struct ParakeetSession {
 
   std::shared_ptr<Tokenizer> tokenizer;
   std::unique_ptr<Decoder> decoder;
+  int32_t tok_start = -1;  // e.g. <|startoftranscript|>
+  int32_t tok_lang = -1;   // e.g. <|en|>
+  int32_t tok_nopnc = -1;  // e.g. <|nopnc|>
+  int32_t tok_noitn = -1;  // e.g. <|noitn|>
 
   // Predictor state buffers (device pointers).
   void* d_h = nullptr;
@@ -345,9 +362,27 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
 
 
     // Tokenizer + decoder.
-    session->tokenizer = std::make_shared<Tokenizer>(find_vocab_path(session->model_dir));
+    const std::string vocab_path = find_vocab_path(session->model_dir);
+    session->tokenizer = std::make_shared<Tokenizer>(vocab_path);
     // Token vocab includes blank_id; duration head handled separately.
     session->decoder = std::make_unique<Decoder>(session->tokenizer, kBlankId, kTokenVocabSize);
+
+    // Attempt to locate prompt tokens in the vocab (NeMo-style). These are needed to prime the predictor.
+    session->tok_start = find_token_id_in_vocab_txt(vocab_path, "<|startoftranscript|>");
+    session->tok_lang = find_token_id_in_vocab_txt(vocab_path, "<|en|>");
+    session->tok_nopnc = find_token_id_in_vocab_txt(vocab_path, "<|nopnc|>");
+    session->tok_noitn = find_token_id_in_vocab_txt(vocab_path, "<|noitn|>");
+    // #region agent log
+    dbglog_ndjson(
+        "H8",
+        "cpp/src/parakeet_trt.cpp:parakeet_create_session:vocab",
+        "Vocab prompt token ids",
+        std::string("{\"vocab_path_len\":") + std::to_string(vocab_path.size()) +
+            ",\"tok_start\":" + std::to_string(session->tok_start) +
+            ",\"tok_lang\":" + std::to_string(session->tok_lang) +
+            ",\"tok_nopnc\":" + std::to_string(session->tok_nopnc) +
+            ",\"tok_noitn\":" + std::to_string(session->tok_noitn) + "}");
+    // #endregion
 
     // Configure predictor fixed shapes (U=1).
     set_input_shape_or_throw(session->pred, "y", {1, 1});
@@ -412,6 +447,10 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         "push_features called",
         std::string("{\"num_frames\":") + std::to_string(num_frames) + "}");
     // #endregion
+
+    // Reset utterance state per chunk. This demo runtime is chunk-scoped; carrying h/c across calls
+    // while also replaying prompt tokens tends to trap decoding in blank.
+    parakeet_reset_utterance(session);
 
     // Encoder engines are currently profiled for 16..256 frames.
     if (num_frames > 256) {
@@ -493,7 +532,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
 
     // Greedy TDT decode loop using joint slices (T=16) due to engine min profile.
-    int32_t y_id = kBlankId;
+    // Prime the predictor with NeMo-style prompt tokens if present, otherwise fall back to blank.
+    int32_t y_id = (session->tok_start >= 0 ? session->tok_start : kBlankId);
     std::vector<int> emitted;
     emitted.reserve(static_cast<size_t>(T_enc));
 
@@ -505,6 +545,39 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     auto last_partial_emit = std::chrono::steady_clock::now() - std::chrono::milliseconds(1000);
     const auto partial_interval = std::chrono::milliseconds(100);
     int last_emitted_count = 0;
+
+    // Predictor priming: run predictor on prompt tokens to seed h/c state (no encoder consumed).
+    auto prime_token = [&](int32_t tok) {
+      if (tok < 0) return;
+      const int64_t host_y = static_cast<int64_t>(tok);
+      cuda_check(cudaMemcpyAsync(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream),
+                 "cudaMemcpyAsync(y_prime)");
+      enqueue_or_throw(session->pred, session->stream);
+      cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_prime)");
+      const size_t h_bytes = volume(session->pred.ctx->getTensorShape("h")) * dtype_size(session->pred.engine->getTensorDataType("h"));
+      const size_t c_bytes = volume(session->pred.ctx->getTensorShape("c")) * dtype_size(session->pred.engine->getTensorDataType("c"));
+      cuda_check(cudaMemcpyAsync(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream),
+                 "cudaMemcpyAsync(h_out->h_prime)");
+      cuda_check(cudaMemcpyAsync(session->d_c, session->d_c_out, c_bytes, cudaMemcpyDeviceToDevice, session->stream),
+                 "cudaMemcpyAsync(c_out->c_prime)");
+      cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_prime_copy)");
+    };
+
+    if (session->tok_start >= 0) {
+      prime_token(session->tok_start);
+    }
+    if (session->tok_lang >= 0) {
+      prime_token(session->tok_lang);
+      y_id = session->tok_lang;
+    }
+    if (session->tok_nopnc >= 0) {
+      prime_token(session->tok_nopnc);
+      y_id = session->tok_nopnc;
+    }
+    if (session->tok_noitn >= 0) {
+      prime_token(session->tok_noitn);
+      y_id = session->tok_noitn;
+    }
 
     int time_idx = 0;
     int dbg_steps = 0;
