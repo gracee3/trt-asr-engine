@@ -669,7 +669,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           }
         }
         // If blank barely wins, prefer the second-best token to avoid all-blank outputs.
-        if (best_tok == kBlankId && second_tok >= 0 && (best_tok_v - second_tok_v) < 0.3f) {
+        if (best_tok == kBlankId && second_tok >= 0) {
           best_tok = second_tok;
           best_tok_v = second_tok_v;
         }
