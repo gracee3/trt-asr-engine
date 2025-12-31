@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -37,6 +38,18 @@ constexpr int32_t kTrtMinT = 16;              // current engine profiles are bui
 constexpr int32_t kTrtChunkT = 16;            // decode using T=16 joint slices (first timestep)
 
 static int32_t kDurationValues[kNumDurations] = {0, 1, 2, 3, 4};
+
+float get_blank_penalty() {
+  const char* v = std::getenv("PARAKEET_BLANK_PENALTY");
+  if (!v || !*v) {
+    return 0.0f;
+  }
+  try {
+    return std::stof(v);
+  } catch (...) {
+    return 0.0f;
+  }
+}
 
 class Logger final : public nvinfer1::ILogger {
  public:
@@ -652,6 +665,10 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         }
 
         // Token argmax over [0..kTokenVocabSize)
+        const float blank_penalty = get_blank_penalty();
+        if (blank_penalty > 0.0f && kBlankId >= 0 && kBlankId < kTokenVocabSize) {
+          session->host_joint_logits_f32[static_cast<size_t>(kBlankId)] -= blank_penalty;
+        }
         int best_tok = 0;
         float best_tok_v = session->host_joint_logits_f32[0];
         int second_tok = -1;
@@ -668,11 +685,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
             second_tok_v = v;
           }
         }
-        // If blank barely wins, prefer the second-best token to avoid all-blank outputs.
-        if (best_tok == kBlankId && second_tok >= 0) {
-          best_tok = second_tok;
-          best_tok_v = second_tok_v;
-        }
+        // No forced substitution: use blank penalty via env var instead.
 
         bool suppress_punct = false;
 
@@ -704,6 +717,9 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   ",\"y_id\":" + std::to_string(y_id) +
                   ",\"best_tok\":" + std::to_string(best_tok) +
                   ",\"best_tok_v\":" + std::to_string(best_tok_v) +
+                  ",\"blank_logit\":" + std::to_string(session->host_joint_logits_f32[static_cast<size_t>(kBlankId)]) +
+                  ",\"second_tok\":" + std::to_string(second_tok) +
+                  ",\"second_tok_v\":" + std::to_string(second_tok_v) +
                   ",\"is_blank\":" + std::string(best_tok == kBlankId ? "true" : "false") +
                   ",\"suppressed_punct\":" + std::string(suppress_punct ? "true" : "false") +
                   ",\"best_dur_idx\":" + std::to_string(best_dur_idx) +
