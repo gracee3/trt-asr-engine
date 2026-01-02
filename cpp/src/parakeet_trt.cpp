@@ -298,9 +298,28 @@ void dump_engine_bindings(const TrtEngine& e, cudaStream_t stream) {
     if (it != e.tensors.end()) {
       ptr = it->second;
     }
+    size_t buf_idx = 0;
+    size_t buf_bytes = 0;
+    bool buf_match = false;
+    for (size_t j = 0; j < e.bufs.size(); ++j) {
+      if (e.bufs[j].ptr == ptr) {
+        buf_idx = j;
+        buf_bytes = e.bufs[j].bytes;
+        buf_match = true;
+        break;
+      }
+    }
+    const uintptr_t base_ptr = buf_match ? reinterpret_cast<uintptr_t>(e.bufs[buf_idx].ptr) : 0;
+    const uintptr_t cur_ptr = reinterpret_cast<uintptr_t>(ptr);
+    const intptr_t offset = buf_match ? static_cast<intptr_t>(cur_ptr - base_ptr) : 0;
     oss << " " << tn << "=0x" << std::hex << reinterpret_cast<uintptr_t>(ptr)
         << std::dec << " dims=" << dims_to_string(dims)
-        << " dtype=" << dtype_name(dt) << " bytes=" << bytes;
+        << " dtype=" << dtype_name(dt) << " bytes=" << bytes
+        << " buf_idx=" << (buf_match ? static_cast<int>(buf_idx) : -1)
+        << " buf_cap=" << e.bufs.size()
+        << " base=0x" << std::hex << base_ptr
+        << " offset=0x" << offset
+        << std::dec << " buf_bytes=" << buf_bytes;
   }
   std::cerr << oss.str() << "\n";
 }
