@@ -215,6 +215,233 @@ void log_debug_sync_config_once() {
   });
 }
 
+struct DebugContext {
+  std::string id;
+  uint64_t utt_seq = 0;
+  uint64_t audio_chunk_idx = 0;
+  uint64_t feature_idx = 0;
+};
+
+struct DebugMemcpyConfig {
+  bool enabled = false;
+  bool sync = false;
+  uint64_t slow_ms = 0;
+};
+
+const char* memcpy_kind_name(cudaMemcpyKind kind) {
+  switch (kind) {
+    case cudaMemcpyHostToDevice:
+      return "H2D";
+    case cudaMemcpyDeviceToHost:
+      return "D2H";
+    case cudaMemcpyDeviceToDevice:
+      return "D2D";
+    case cudaMemcpyHostToHost:
+      return "H2H";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+DebugMemcpyConfig get_debug_memcpy_config() {
+  static DebugMemcpyConfig cfg = []() {
+    DebugMemcpyConfig out{};
+    out.sync = get_env_bool("PARAKEET_DEBUG_SYNC_MEMCPY", false);
+    out.slow_ms = get_env_u64("PARAKEET_SLOW_MEMCPY_MS", 50);
+    out.enabled = out.sync || out.slow_ms > 0;
+    return out;
+  }();
+  return cfg;
+}
+
+void log_debug_memcpy_config_once() {
+  static std::once_flag once;
+  std::call_once(once, []() {
+    const auto cfg = get_debug_memcpy_config();
+    if (!cfg.enabled) return;
+    std::cerr << "[parakeet_trt] debug_memcpy=1 sync=" << (cfg.sync ? 1 : 0)
+              << " slow_ms=" << cfg.slow_ms << "\n";
+  });
+}
+
+static void debug_memcpy_async(void* dst,
+                               const void* src,
+                               size_t bytes,
+                               cudaMemcpyKind kind,
+                               cudaStream_t stream,
+                               const char* label,
+                               const DebugContext* ctx) {
+  const auto cfg = get_debug_memcpy_config();
+  log_debug_memcpy_config_once();
+  const auto t0 = std::chrono::steady_clock::now();
+  const cudaError_t err = cudaMemcpyAsync(dst, src, bytes, kind, stream);
+  const auto t1 = std::chrono::steady_clock::now();
+  const uint64_t copy_ms =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+  const cudaError_t peek_err = cudaPeekAtLastError();
+  uint64_t sync_ms = 0;
+  cudaError_t sync_err = cudaSuccess;
+  cudaError_t post_err = cudaSuccess;
+  if (cfg.sync) {
+    const auto s0 = std::chrono::steady_clock::now();
+    sync_err = cudaStreamSynchronize(stream);
+    const auto s1 = std::chrono::steady_clock::now();
+    sync_ms =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(s1 - s0).count());
+    post_err = cudaPeekAtLastError();
+  }
+
+  const bool slow = cfg.slow_ms > 0 && (copy_ms >= cfg.slow_ms || sync_ms >= cfg.slow_ms);
+  if (cfg.sync || slow || err != cudaSuccess || peek_err != cudaSuccess ||
+      sync_err != cudaSuccess || post_err != cudaSuccess) {
+    std::cerr << "[parakeet_trt] memcpy_async label=" << (label ? label : "")
+              << " id=" << (ctx ? ctx->id : "")
+              << " utt_seq=" << (ctx ? ctx->utt_seq : 0)
+              << " audio_chunk_idx=" << (ctx ? ctx->audio_chunk_idx : 0)
+              << " feature_idx=" << (ctx ? ctx->feature_idx : 0)
+              << " bytes=" << bytes
+              << " kind=" << memcpy_kind_name(kind)
+              << " stream=0x" << std::hex << reinterpret_cast<uintptr_t>(stream) << std::dec
+              << " src=0x" << std::hex << reinterpret_cast<uintptr_t>(src) << std::dec
+              << " dst=0x" << std::hex << reinterpret_cast<uintptr_t>(dst) << std::dec
+              << " copy_ms=" << copy_ms
+              << " err=" << cudaGetErrorString(err)
+              << " peek_err=" << cudaGetErrorString(peek_err)
+              << " sync_ms=" << sync_ms
+              << " sync_err=" << cudaGetErrorString(sync_err)
+              << " post_err=" << cudaGetErrorString(post_err)
+              << "\n";
+  }
+
+  if (err != cudaSuccess) {
+    throw std::runtime_error(std::string(label ? label : "cudaMemcpyAsync") + ": " +
+                             cudaGetErrorString(err));
+  }
+}
+
+static void debug_memset_async(void* ptr,
+                               int value,
+                               size_t bytes,
+                               cudaStream_t stream,
+                               const char* label,
+                               const DebugContext* ctx) {
+  const auto cfg = get_debug_memcpy_config();
+  log_debug_memcpy_config_once();
+  const auto t0 = std::chrono::steady_clock::now();
+  const cudaError_t err = cudaMemsetAsync(ptr, value, bytes, stream);
+  const auto t1 = std::chrono::steady_clock::now();
+  const uint64_t set_ms =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+  const cudaError_t peek_err = cudaPeekAtLastError();
+  uint64_t sync_ms = 0;
+  cudaError_t sync_err = cudaSuccess;
+  cudaError_t post_err = cudaSuccess;
+  if (cfg.sync) {
+    const auto s0 = std::chrono::steady_clock::now();
+    sync_err = cudaStreamSynchronize(stream);
+    const auto s1 = std::chrono::steady_clock::now();
+    sync_ms =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(s1 - s0).count());
+    post_err = cudaPeekAtLastError();
+  }
+
+  const bool slow = cfg.slow_ms > 0 && (set_ms >= cfg.slow_ms || sync_ms >= cfg.slow_ms);
+  if (cfg.sync || slow || err != cudaSuccess || peek_err != cudaSuccess ||
+      sync_err != cudaSuccess || post_err != cudaSuccess) {
+    std::cerr << "[parakeet_trt] memset_async label=" << (label ? label : "")
+              << " id=" << (ctx ? ctx->id : "")
+              << " utt_seq=" << (ctx ? ctx->utt_seq : 0)
+              << " audio_chunk_idx=" << (ctx ? ctx->audio_chunk_idx : 0)
+              << " feature_idx=" << (ctx ? ctx->feature_idx : 0)
+              << " bytes=" << bytes
+              << " value=" << value
+              << " stream=0x" << std::hex << reinterpret_cast<uintptr_t>(stream) << std::dec
+              << " ptr=0x" << std::hex << reinterpret_cast<uintptr_t>(ptr) << std::dec
+              << " set_ms=" << set_ms
+              << " err=" << cudaGetErrorString(err)
+              << " peek_err=" << cudaGetErrorString(peek_err)
+              << " sync_ms=" << sync_ms
+              << " sync_err=" << cudaGetErrorString(sync_err)
+              << " post_err=" << cudaGetErrorString(post_err)
+              << "\n";
+  }
+
+  if (err != cudaSuccess) {
+    throw std::runtime_error(std::string(label ? label : "cudaMemsetAsync") + ": " +
+                             cudaGetErrorString(err));
+  }
+}
+
+static void debug_cuda_free(void* ptr, const char* label) {
+  if (!ptr) return;
+  const auto cfg = get_debug_memcpy_config();
+  log_debug_memcpy_config_once();
+  const auto t0 = std::chrono::steady_clock::now();
+  const cudaError_t err = cudaFree(ptr);
+  const auto t1 = std::chrono::steady_clock::now();
+  const uint64_t free_ms =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+  cudaError_t sync_err = cudaSuccess;
+  uint64_t sync_ms = 0;
+  cudaError_t post_err = cudaSuccess;
+  if (cfg.sync) {
+    const auto s0 = std::chrono::steady_clock::now();
+    sync_err = cudaDeviceSynchronize();
+    const auto s1 = std::chrono::steady_clock::now();
+    sync_ms =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(s1 - s0).count());
+    post_err = cudaPeekAtLastError();
+  }
+  if (cfg.sync || err != cudaSuccess || sync_err != cudaSuccess) {
+    std::cerr << "[parakeet_trt] cudaFree label=" << (label ? label : "")
+              << " ptr=0x" << std::hex << reinterpret_cast<uintptr_t>(ptr) << std::dec
+              << " free_ms=" << free_ms
+              << " err=" << cudaGetErrorString(err)
+              << " sync_ms=" << sync_ms
+              << " sync_err=" << cudaGetErrorString(sync_err)
+              << " post_err=" << cudaGetErrorString(post_err)
+              << "\n";
+  }
+  if (err != cudaSuccess) {
+    throw std::runtime_error(std::string(label ? label : "cudaFree") + ": " + cudaGetErrorString(err));
+  }
+}
+
+static void debug_cuda_event_destroy(cudaEvent_t ev, const char* label) {
+  if (!ev) return;
+  const auto cfg = get_debug_memcpy_config();
+  log_debug_memcpy_config_once();
+  const auto t0 = std::chrono::steady_clock::now();
+  const cudaError_t err = cudaEventDestroy(ev);
+  const auto t1 = std::chrono::steady_clock::now();
+  const uint64_t destroy_ms =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+  if (cfg.sync || err != cudaSuccess) {
+    std::cerr << "[parakeet_trt] cudaEventDestroy label=" << (label ? label : "")
+              << " destroy_ms=" << destroy_ms
+              << " err=" << cudaGetErrorString(err)
+              << "\n";
+  }
+}
+
+static void debug_cuda_stream_destroy(cudaStream_t stream, const char* label) {
+  if (!stream) return;
+  const auto cfg = get_debug_memcpy_config();
+  log_debug_memcpy_config_once();
+  const auto t0 = std::chrono::steady_clock::now();
+  const cudaError_t err = cudaStreamDestroy(stream);
+  const auto t1 = std::chrono::steady_clock::now();
+  const uint64_t destroy_ms =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+  if (cfg.sync || err != cudaSuccess) {
+    std::cerr << "[parakeet_trt] cudaStreamDestroy label=" << (label ? label : "")
+              << " stream=0x" << std::hex << reinterpret_cast<uintptr_t>(stream) << std::dec
+              << " destroy_ms=" << destroy_ms
+              << " err=" << cudaGetErrorString(err)
+              << "\n";
+  }
+}
+
 class Logger final : public nvinfer1::ILogger {
  public:
   void log(Severity severity, const char* msg) noexcept override {
@@ -281,13 +508,6 @@ using TrtUniquePtr = std::unique_ptr<T, TrtDeleter>;
 struct DeviceBuffer {
   void* ptr = nullptr;
   size_t bytes = 0;
-};
-
-struct DebugContext {
-  std::string id;
-  uint64_t utt_seq = 0;
-  uint64_t audio_chunk_idx = 0;
-  uint64_t feature_idx = 0;
 };
 
 static void cuda_check(cudaError_t e, const char* what) {
@@ -489,7 +709,7 @@ static void allocate_buffers_for_current_shapes(TrtEngine& e, cudaStream_t strea
         if (!e.ctx->setTensorAddress(tn, b.ptr)) throw std::runtime_error(std::string("setTensorAddress failed for ") + tn);
         continue;
       }
-      cuda_check(cudaFree(b.ptr), "cudaFree");
+      debug_cuda_free(b.ptr, "alloc_buffers:cudaFree");
       b.ptr = nullptr;
       b.bytes = 0;
     }
@@ -497,7 +717,7 @@ static void allocate_buffers_for_current_shapes(TrtEngine& e, cudaStream_t strea
     b.bytes = bytes;
     e.tensors[tn] = b.ptr;
     if (!e.ctx->setTensorAddress(tn, b.ptr)) throw std::runtime_error(std::string("setTensorAddress failed for ") + tn);
-    cuda_check(cudaMemsetAsync(b.ptr, 0, bytes, stream), "cudaMemsetAsync");
+    debug_memset_async(b.ptr, 0, bytes, stream, "alloc_buffers:memset", nullptr);
   }
 #else
   (void)stream;
@@ -516,8 +736,10 @@ static size_t slot_reuse_cap_for_engine(const TrtEngine& e) {
 static void ensure_slot_events(TrtEngine& e, size_t cap) {
   if (cap == 0) return;
   if (e.slot_events.size() == cap) return;
-  for (auto ev : e.slot_events) {
-    if (ev) cudaEventDestroy(ev);
+  for (size_t i = 0; i < e.slot_events.size(); ++i) {
+    if (e.slot_events[i]) {
+      debug_cuda_event_destroy(e.slot_events[i], e.name.c_str());
+    }
   }
   e.slot_events.clear();
   e.slot_event_ready.clear();
@@ -871,8 +1093,8 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
     // Initialize predictor state to zeros.
     const size_t h_bytes = volume(session->pred.ctx->getTensorShape("h")) * dtype_size(session->pred.engine->getTensorDataType("h"));
     const size_t c_bytes = volume(session->pred.ctx->getTensorShape("c")) * dtype_size(session->pred.engine->getTensorDataType("c"));
-    cuda_check(cudaMemsetAsync(session->d_h, 0, h_bytes, session->stream), "cudaMemsetAsync(h)");
-    cuda_check(cudaMemsetAsync(session->d_c, 0, c_bytes, session->stream), "cudaMemsetAsync(c)");
+  debug_memset_async(session->d_h, 0, h_bytes, session->stream, "prime_state:h", &session->debug);
+  debug_memset_async(session->d_c, 0, c_bytes, session->stream, "prime_state:c", &session->debug);
 
     // Configure joint shapes for slice mode: encoder_output [1,1024,16], predictor_output [1,640,1].
     set_input_shape_or_throw(session->joint, "encoder_output", {1, kEncDim, kTrtChunkT});
@@ -905,7 +1127,7 @@ void parakeet_destroy_session(ParakeetSession* session) {
   destroy_slot_events(session->pred);
   destroy_slot_events(session->joint);
   if (session->stream) {
-    cudaStreamDestroy(session->stream);
+    debug_cuda_stream_destroy(session->stream, "parakeet_destroy_session");
     session->stream = nullptr;
   }
   delete session;
@@ -915,28 +1137,28 @@ void parakeet_reset_utterance(ParakeetSession* session) {
   if (!session) return;
   session->decoder->reset();
   // Reset predictor state to zeros.
-  cuda_check(cudaMemsetAsync(session->d_h, 0, kPredLayers * 1 * kPredDim * 2, session->stream), "cudaMemsetAsync(h)");
-  cuda_check(cudaMemsetAsync(session->d_c, 0, kPredLayers * 1 * kPredDim * 2, session->stream), "cudaMemsetAsync(c)");
+  debug_memset_async(session->d_h, 0, kPredLayers * 1 * kPredDim * 2, session->stream, "reset:h", &session->debug);
+  debug_memset_async(session->d_c, 0, kPredLayers * 1 * kPredDim * 2, session->stream, "reset:c", &session->debug);
 
   // Prime predictor with NeMo-style prompt tokens once per utterance.
   // This seeds h/c and initializes y_id so decoding can continue across push_features calls.
   auto prime_token = [&](int32_t tok) {
     if (tok < 0) return;
     const int64_t host_y = static_cast<int64_t>(tok);
-    cuda_check(cudaMemcpyAsync(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream),
-               "cudaMemcpyAsync(y_prime)");
+    debug_memcpy_async(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream,
+                       "prime:y", &session->debug);
     enqueue_or_throw(session->pred, session->stream, &session->debug);
     cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_prime)");
     const size_t h_bytes = volume(session->pred.ctx->getTensorShape("h")) * dtype_size(session->pred.engine->getTensorDataType("h"));
     const size_t c_bytes = volume(session->pred.ctx->getTensorShape("c")) * dtype_size(session->pred.engine->getTensorDataType("c"));
     const size_t g_bytes = volume(session->pred.ctx->getTensorShape("g")) * dtype_size(session->pred.engine->getTensorDataType("g"));
-    cuda_check(cudaMemcpyAsync(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream),
-               "cudaMemcpyAsync(h_out->h_prime)");
-    cuda_check(cudaMemcpyAsync(session->d_c, session->d_c_out, c_bytes, cudaMemcpyDeviceToDevice, session->stream),
-               "cudaMemcpyAsync(c_out->c_prime)");
+    debug_memcpy_async(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream,
+                       "prime:h_out->h", &session->debug);
+    debug_memcpy_async(session->d_c, session->d_c_out, c_bytes, cudaMemcpyDeviceToDevice, session->stream,
+                       "prime:c_out->c", &session->debug);
     // Cache predictor output for the joint (so we don't need to rerun predictor on blank steps).
-    cuda_check(cudaMemcpyAsync(session->d_joint_pred_in, session->d_g, g_bytes, cudaMemcpyDeviceToDevice, session->stream),
-               "cudaMemcpyAsync(g->joint.predictor_output_prime)");
+    debug_memcpy_async(session->d_joint_pred_in, session->d_g, g_bytes, cudaMemcpyDeviceToDevice, session->stream,
+                       "prime:g->joint_pred", &session->debug);
     cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_prime_copy)");
   };
 
@@ -1010,8 +1232,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
     // Host -> device: length
     const int64_t host_len = static_cast<int64_t>(T_valid);
-    cuda_check(cudaMemcpyAsync(session->d_length, &host_len, sizeof(host_len), cudaMemcpyHostToDevice, session->stream),
-               "cudaMemcpyAsync(length)");
+    debug_memcpy_async(session->d_length, &host_len, sizeof(host_len), cudaMemcpyHostToDevice, session->stream,
+                       "enc:length", &session->debug);
 
     // Host -> device: audio features.
     nvinfer1::DataType audio_dt = session->enc.engine->getTensorDataType("audio_signal");
@@ -1022,7 +1244,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           host_audio_fp16[static_cast<size_t>(m) * static_cast<size_t>(T_shape) + static_cast<size_t>(t)] = f32_to_fp16(features_bct_f32[static_cast<size_t>(m) * static_cast<size_t>(T_valid) + static_cast<size_t>(t)]);
         }
       }
-      cuda_check(cudaMemcpyAsync(session->d_audio, host_audio_fp16.data(), host_audio_fp16.size() * 2, cudaMemcpyHostToDevice, session->stream), "cudaMemcpyAsync(audio_signal)");
+      debug_memcpy_async(session->d_audio, host_audio_fp16.data(), host_audio_fp16.size() * 2,
+                         cudaMemcpyHostToDevice, session->stream, "enc:audio_fp16", &session->debug);
     } else {
       std::vector<float> host_audio_f32(static_cast<size_t>(kNMels) * static_cast<size_t>(T_shape), 0.0f);
       for (int32_t m = 0; m < kNMels; ++m) {
@@ -1030,7 +1253,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           host_audio_f32[static_cast<size_t>(m) * static_cast<size_t>(T_shape) + static_cast<size_t>(t)] = features_bct_f32[static_cast<size_t>(m) * static_cast<size_t>(T_valid) + static_cast<size_t>(t)];
         }
       }
-      cuda_check(cudaMemcpyAsync(session->d_audio, host_audio_f32.data(), host_audio_f32.size() * 4, cudaMemcpyHostToDevice, session->stream), "cudaMemcpyAsync(audio_signal)");
+      debug_memcpy_async(session->d_audio, host_audio_f32.data(), host_audio_f32.size() * 4,
+                         cudaMemcpyHostToDevice, session->stream, "enc:audio_f32", &session->debug);
     }
 
     // Run encoder.
@@ -1039,8 +1263,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
     // Read encoded length.
     int64_t enc_len_host = 0;
-    cuda_check(cudaMemcpyAsync(&enc_len_host, session->d_enc_len, sizeof(enc_len_host), cudaMemcpyDeviceToHost, session->stream),
-               "cudaMemcpyAsync(encoded_lengths)");
+    debug_memcpy_async(&enc_len_host, session->d_enc_len, sizeof(enc_len_host), cudaMemcpyDeviceToHost, session->stream,
+                       "enc:encoded_lengths", &session->debug);
     cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(encoded_lengths)");
     const int32_t T_enc = static_cast<int32_t>(enc_len_host);
     if (T_enc <= 0 || T_enc > T_shape) throw std::runtime_error("Invalid encoded_lengths from encoder");
@@ -1059,11 +1283,13 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     std::vector<float> host_enc_out_f32(static_cast<size_t>(kEncDim) * static_cast<size_t>(T_enc));
     if (enc_out_dt == nvinfer1::DataType::kHALF) {
       std::vector<uint16_t> tmp(host_enc_out_f32.size());
-      cuda_check(cudaMemcpyAsync(tmp.data(), session->d_enc_out, tmp.size() * 2, cudaMemcpyDeviceToHost, session->stream), "cudaMemcpyAsync(enc_out)");
+      debug_memcpy_async(tmp.data(), session->d_enc_out, tmp.size() * 2, cudaMemcpyDeviceToHost, session->stream,
+                         "enc:out_fp16", &session->debug);
       cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize");
       for (size_t i = 0; i < tmp.size(); ++i) host_enc_out_f32[i] = fp16_to_f32(tmp[i]);
     } else {
-      cuda_check(cudaMemcpyAsync(host_enc_out_f32.data(), session->d_enc_out, host_enc_out_f32.size() * 4, cudaMemcpyDeviceToHost, session->stream), "cudaMemcpyAsync(enc_out)");
+      debug_memcpy_async(host_enc_out_f32.data(), session->d_enc_out, host_enc_out_f32.size() * 4,
+                         cudaMemcpyDeviceToHost, session->stream, "enc:out_f32", &session->debug);
       cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize");
     }
 
@@ -1106,9 +1332,12 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       if (joint_enc_dt == nvinfer1::DataType::kHALF) {
         std::vector<uint16_t> tmp(host_joint_enc_slice_f32.size());
         for (size_t i = 0; i < tmp.size(); ++i) tmp[i] = f32_to_fp16(host_joint_enc_slice_f32[i]);
-        cuda_check(cudaMemcpyAsync(session->d_joint_enc_in, tmp.data(), tmp.size() * 2, cudaMemcpyHostToDevice, session->stream), "cudaMemcpyAsync(joint.enc)");
+        debug_memcpy_async(session->d_joint_enc_in, tmp.data(), tmp.size() * 2, cudaMemcpyHostToDevice,
+                           session->stream, "joint:enc_in_fp16", &session->debug);
       } else {
-        cuda_check(cudaMemcpyAsync(session->d_joint_enc_in, host_joint_enc_slice_f32.data(), host_joint_enc_slice_f32.size() * 4, cudaMemcpyHostToDevice, session->stream), "cudaMemcpyAsync(joint.enc)");
+        debug_memcpy_async(session->d_joint_enc_in, host_joint_enc_slice_f32.data(),
+                           host_joint_enc_slice_f32.size() * 4, cudaMemcpyHostToDevice, session->stream,
+                           "joint:enc_in_f32", &session->debug);
       }
 
       for (int u = 0; u < max_symbols_per_timestep && time_idx < T_enc; ++u) {
@@ -1118,14 +1347,18 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
         // Copy logits for (t=0,u=0) to host.
         if (joint_out_dt == nvinfer1::DataType::kHALF) {
-          cuda_check(cudaMemcpyAsync(session->host_joint_logits_fp16.data(), session->d_joint_out, session->host_joint_logits_fp16.size() * 2, cudaMemcpyDeviceToHost, session->stream), "cudaMemcpyAsync(joint_out_fp16)");
+          debug_memcpy_async(session->host_joint_logits_fp16.data(), session->d_joint_out,
+                             session->host_joint_logits_fp16.size() * 2, cudaMemcpyDeviceToHost, session->stream,
+                             "joint:out_fp16", &session->debug);
           cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_out");
           for (size_t i = 0; i < session->host_joint_logits_f32.size(); ++i) {
             float f = fp16_to_f32(session->host_joint_logits_fp16[i]);
             session->host_joint_logits_f32[i] = std::isnan(f) ? -100.0f : f;
           }
         } else {
-          cuda_check(cudaMemcpyAsync(session->host_joint_logits_f32.data(), session->d_joint_out, session->host_joint_logits_f32.size() * 4, cudaMemcpyDeviceToHost, session->stream), "cudaMemcpyAsync(joint_out_f32)");
+          debug_memcpy_async(session->host_joint_logits_f32.data(), session->d_joint_out,
+                             session->host_joint_logits_f32.size() * 4, cudaMemcpyDeviceToHost, session->stream,
+                             "joint:out_f32", &session->debug);
           cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_out");
           for (size_t i = 0; i < session->host_joint_logits_f32.size(); ++i) {
             if (std::isnan(session->host_joint_logits_f32[i])) session->host_joint_logits_f32[i] = -100.0f;
@@ -1251,17 +1484,17 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           const size_t g_bytes = volume(session->pred.ctx->getTensorShape("g")) * dtype_size(session->pred.engine->getTensorDataType("g"));
 
           const int64_t host_y = static_cast<int64_t>(best_tok);
-          cuda_check(cudaMemcpyAsync(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream),
-                     "cudaMemcpyAsync(y)");
+          debug_memcpy_async(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream,
+                             "predictor:y", &session->debug);
           enqueue_or_throw(session->pred, session->stream, &session->debug);
           cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor)");
 
-          cuda_check(cudaMemcpyAsync(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream),
-                     "cudaMemcpyAsync(h_out->h)");
-          cuda_check(cudaMemcpyAsync(session->d_c, session->d_c_out, c_bytes, cudaMemcpyDeviceToDevice, session->stream),
-                     "cudaMemcpyAsync(c_out->c)");
-          cuda_check(cudaMemcpyAsync(session->d_joint_pred_in, session->d_g, g_bytes, cudaMemcpyDeviceToDevice, session->stream),
-                     "cudaMemcpyAsync(g->joint.predictor_output)");
+          debug_memcpy_async(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream,
+                             "predictor:h_out->h", &session->debug);
+          debug_memcpy_async(session->d_c, session->d_c_out, c_bytes, cudaMemcpyDeviceToDevice, session->stream,
+                             "predictor:c_out->c", &session->debug);
+          debug_memcpy_async(session->d_joint_pred_in, session->d_g, g_bytes, cudaMemcpyDeviceToDevice, session->stream,
+                             "predictor:g->joint_pred", &session->debug);
           cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_commit)");
 
           y_id = best_tok;
