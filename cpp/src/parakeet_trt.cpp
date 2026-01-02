@@ -1687,16 +1687,14 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       // force time_idx advancement to prevent infinite spin.
       // This can happen when the model produces pathological output (all non-blank tokens).
       if (!emitted_blank && time_idx < T_enc) {
-        const auto cfg = get_stage_marker_config();
-        if (cfg.enabled) {
-          std::cerr << "[parakeet_trt] WARN: forced time_idx advance at " << time_idx
-                    << " (no blank after " << max_symbols_per_timestep << " symbols)"
-                    << " id=" << session->debug.id
-                    << " utt_seq=" << session->debug.utt_seq
-                    << " audio_chunk_idx=" << session->debug.audio_chunk_idx
-                    << " feature_idx=" << session->debug.feature_idx
-                    << "\n";
-        }
+        // Always log forced advance warnings - important production diagnostic
+        std::cerr << "[parakeet_trt] WARN: forced time_idx advance at " << time_idx
+                  << " (no blank after " << max_symbols_per_timestep << " symbols)"
+                  << " id=" << session->debug.id
+                  << " utt_seq=" << session->debug.utt_seq
+                  << " audio_chunk_idx=" << session->debug.audio_chunk_idx
+                  << " feature_idx=" << session->debug.feature_idx
+                  << "\n";
         time_idx += 1;
       }
     }
