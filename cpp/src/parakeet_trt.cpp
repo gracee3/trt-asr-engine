@@ -1491,6 +1491,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                            "joint:enc_in_f32", &session->debug);
       }
 
+      bool emitted_blank = false;  // Track if we hit a blank in the inner loop
       for (int u = 0; u < max_symbols_per_timestep && time_idx < T_enc; ++u) {
         // Run joint using the cached predictor output `g` (session->d_joint_pred_in).
         debug_stage_marker("joint:pre_enqueue", &session->debug, session->stream, time_idx);
@@ -1660,6 +1661,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         }
 
         // Blank: advance encoder time using duration head.
+        emitted_blank = true;
         time_idx += advance;
 
         // Emit partial hypothesis at most every ~100ms (best-effort).
@@ -1679,6 +1681,23 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         }
 
         break;  // move to next encoder time window
+      }
+
+      // Safety: if inner loop exhausted max_symbols_per_timestep without emitting blank,
+      // force time_idx advancement to prevent infinite spin.
+      // This can happen when the model produces pathological output (all non-blank tokens).
+      if (!emitted_blank && time_idx < T_enc) {
+        const auto cfg = get_stage_marker_config();
+        if (cfg.enabled) {
+          std::cerr << "[parakeet_trt] WARN: forced time_idx advance at " << time_idx
+                    << " (no blank after " << max_symbols_per_timestep << " symbols)"
+                    << " id=" << session->debug.id
+                    << " utt_seq=" << session->debug.utt_seq
+                    << " audio_chunk_idx=" << session->debug.audio_chunk_idx
+                    << " feature_idx=" << session->debug.feature_idx
+                    << "\n";
+        }
+        time_idx += 1;
       }
     }
 
