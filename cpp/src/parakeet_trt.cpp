@@ -7,6 +7,7 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -213,6 +214,90 @@ void log_debug_sync_config_once() {
     std::cerr << "[parakeet_trt] debug_sync=1 target=" << debug_sync_target_name(cfg.target)
               << " limit=" << cfg.limit << "\n";
   });
+}
+
+enum class DebugDeviceSyncPoint {
+  kPush,
+  kDestroy,
+  kBoth,
+};
+
+struct DebugDeviceSyncConfig {
+  bool enabled = false;
+  DebugDeviceSyncPoint point = DebugDeviceSyncPoint::kBoth;
+};
+
+DebugDeviceSyncPoint parse_debug_device_sync_point(const char* v, DebugDeviceSyncPoint fallback) {
+  if (!v || !*v) return fallback;
+  std::string s(v);
+  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (s == "push" || s == "push_features") return DebugDeviceSyncPoint::kPush;
+  if (s == "destroy" || s == "teardown") return DebugDeviceSyncPoint::kDestroy;
+  if (s == "both" || s == "all") return DebugDeviceSyncPoint::kBoth;
+  return fallback;
+}
+
+const char* debug_device_sync_point_name(DebugDeviceSyncPoint p) {
+  switch (p) {
+    case DebugDeviceSyncPoint::kPush:
+      return "push";
+    case DebugDeviceSyncPoint::kDestroy:
+      return "destroy";
+    case DebugDeviceSyncPoint::kBoth:
+    default:
+      return "both";
+  }
+}
+
+DebugDeviceSyncConfig get_debug_device_sync_config() {
+  static DebugDeviceSyncConfig cfg = []() {
+    DebugDeviceSyncConfig out{};
+    out.enabled = get_env_bool("PARAKEET_DEBUG_DEVICE_SYNC", false);
+    out.point = parse_debug_device_sync_point(std::getenv("PARAKEET_DEBUG_DEVICE_SYNC_POINT"),
+                                              DebugDeviceSyncPoint::kBoth);
+    return out;
+  }();
+  return cfg;
+}
+
+void log_debug_device_sync_config_once() {
+  static std::once_flag once;
+  std::call_once(once, []() {
+    const auto cfg = get_debug_device_sync_config();
+    if (!cfg.enabled) return;
+    std::cerr << "[parakeet_trt] debug_device_sync=1 point="
+              << debug_device_sync_point_name(cfg.point) << "\n";
+  });
+}
+
+bool debug_device_sync_point_matches(DebugDeviceSyncPoint cfg_point, DebugDeviceSyncPoint current) {
+  if (cfg_point == DebugDeviceSyncPoint::kBoth) return true;
+  return cfg_point == current;
+}
+
+void debug_device_sync(DebugDeviceSyncPoint point, const char* label, const DebugContext* ctx) {
+  const auto cfg = get_debug_device_sync_config();
+  if (!cfg.enabled) return;
+  if (!debug_device_sync_point_matches(cfg.point, point)) return;
+  log_debug_device_sync_config_once();
+  const cudaError_t pre_err = cudaPeekAtLastError();
+  const auto t0 = std::chrono::steady_clock::now();
+  const cudaError_t sync_err = cudaDeviceSynchronize();
+  const auto t1 = std::chrono::steady_clock::now();
+  const uint64_t sync_ms =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+  const cudaError_t post_err = cudaGetLastError();
+  std::cerr << "[parakeet_trt] device_sync point=" << debug_device_sync_point_name(point)
+            << " label=" << (label ? label : "")
+            << " id=" << (ctx ? ctx->id : "")
+            << " utt_seq=" << (ctx ? ctx->utt_seq : 0)
+            << " audio_chunk_idx=" << (ctx ? ctx->audio_chunk_idx : 0)
+            << " feature_idx=" << (ctx ? ctx->feature_idx : 0)
+            << " sync_ms=" << sync_ms
+            << " pre_err=" << cudaGetErrorString(pre_err)
+            << " sync_err=" << cudaGetErrorString(sync_err)
+            << " post_err=" << cudaGetErrorString(post_err)
+            << "\n";
 }
 
 struct DebugContext {
@@ -1123,6 +1208,7 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
 
 void parakeet_destroy_session(ParakeetSession* session) {
   if (!session) return;
+  debug_device_sync(DebugDeviceSyncPoint::kDestroy, "destroy_session:pre", &session->debug);
   destroy_slot_events(session->enc);
   destroy_slot_events(session->pred);
   destroy_slot_events(session->joint);
@@ -1560,6 +1646,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         std::string("{\"y_id_out\":") + std::to_string(y_id_out) +
             ",\"cleared_punct_state\":" + std::string(cleared_punct_state ? "true" : "false") + "}");
     // #endregion
+
+    debug_device_sync(DebugDeviceSyncPoint::kPush, "push_features:end", &session->debug);
 
     return 0;
   } catch (const std::exception& e) {
