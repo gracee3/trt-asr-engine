@@ -157,6 +157,64 @@ void log_slot_reuse_config_once() {
   });
 }
 
+enum class DebugSyncTarget {
+  kAll,
+  kEncoder,
+  kPredictor,
+  kJoint,
+};
+
+struct DebugSyncConfig {
+  bool enabled = false;
+  DebugSyncTarget target = DebugSyncTarget::kAll;
+  uint64_t limit = 0;
+};
+
+DebugSyncTarget parse_debug_sync_target(const char* v, DebugSyncTarget fallback) {
+  if (!v || !*v) return fallback;
+  const std::string s(v);
+  if (s == "encoder") return DebugSyncTarget::kEncoder;
+  if (s == "predictor") return DebugSyncTarget::kPredictor;
+  if (s == "joint") return DebugSyncTarget::kJoint;
+  if (s == "all") return DebugSyncTarget::kAll;
+  return fallback;
+}
+
+const char* debug_sync_target_name(DebugSyncTarget t) {
+  switch (t) {
+    case DebugSyncTarget::kEncoder:
+      return "encoder";
+    case DebugSyncTarget::kPredictor:
+      return "predictor";
+    case DebugSyncTarget::kJoint:
+      return "joint";
+    case DebugSyncTarget::kAll:
+    default:
+      return "all";
+  }
+}
+
+DebugSyncConfig get_debug_sync_config() {
+  static DebugSyncConfig cfg = []() {
+    DebugSyncConfig out{};
+    out.enabled = get_env_bool("PARAKEET_DEBUG_SYNC", false);
+    out.target = parse_debug_sync_target(std::getenv("PARAKEET_DEBUG_SYNC_ENGINE"), DebugSyncTarget::kAll);
+    out.limit = get_env_u64("PARAKEET_DEBUG_SYNC_LIMIT", 0);
+    return out;
+  }();
+  return cfg;
+}
+
+void log_debug_sync_config_once() {
+  static std::once_flag once;
+  std::call_once(once, []() {
+    const auto cfg = get_debug_sync_config();
+    if (!cfg.enabled) return;
+    std::cerr << "[parakeet_trt] debug_sync=1 target=" << debug_sync_target_name(cfg.target)
+              << " limit=" << cfg.limit << "\n";
+  });
+}
+
 class Logger final : public nvinfer1::ILogger {
  public:
   void log(Severity severity, const char* msg) noexcept override {
@@ -326,6 +384,9 @@ struct TrtEngine {
   std::vector<uint8_t> slot_event_ready;
   uint64_t slot_seq = 0;
   uint64_t slot_log_count = 0;
+  uint64_t debug_sync_count = 0;
+  uint64_t debug_sync_utt_seq = 0;
+  bool debug_sync_utt_seq_set = false;
 };
 
 const char* dtype_name(nvinfer1::DataType dt) {
@@ -553,9 +614,40 @@ static void slot_reuse_record_after_enqueue(TrtEngine& e,
   e.slot_seq = e.slot_seq + 1;
 }
 
+static bool debug_sync_target_matches(const TrtEngine& e, DebugSyncTarget target) {
+  switch (target) {
+    case DebugSyncTarget::kEncoder:
+      return e.name == "encoder";
+    case DebugSyncTarget::kPredictor:
+      return e.name == "predictor";
+    case DebugSyncTarget::kJoint:
+      return e.name == "joint";
+    case DebugSyncTarget::kAll:
+    default:
+      return true;
+  }
+}
+
+static bool should_debug_sync(TrtEngine& e, const DebugSyncConfig& cfg, const DebugContext* ctx) {
+  if (!cfg.enabled) return false;
+  if (!debug_sync_target_matches(e, cfg.target)) return false;
+  if (cfg.limit == 0) return true;
+  if (ctx) {
+    if (!e.debug_sync_utt_seq_set || e.debug_sync_utt_seq != ctx->utt_seq) {
+      e.debug_sync_utt_seq = ctx->utt_seq;
+      e.debug_sync_count = 0;
+      e.debug_sync_utt_seq_set = true;
+    }
+  }
+  if (e.debug_sync_count >= cfg.limit) return false;
+  e.debug_sync_count += 1;
+  return true;
+}
+
 static void enqueue_or_throw(TrtEngine& e, cudaStream_t stream, const DebugContext* ctx) {
 #if NV_TENSORRT_MAJOR >= 10
   log_slot_reuse_config_once();
+  log_debug_sync_config_once();
   size_t slot_idx = 0;
   slot_reuse_check_before_enqueue(e, stream, ctx, &slot_idx);
   const auto t0 = std::chrono::steady_clock::now();
@@ -572,6 +664,29 @@ static void enqueue_or_throw(TrtEngine& e, cudaStream_t stream, const DebugConte
   const cudaError_t peek_err = cudaPeekAtLastError();
   const uint64_t slow_ms = get_slow_enqueue_ms();
   const bool slow = slow_ms > 0 && elapsed_ms >= slow_ms;
+  const auto dbg_cfg = get_debug_sync_config();
+  if (should_debug_sync(e, dbg_cfg, ctx)) {
+    const auto s0 = std::chrono::steady_clock::now();
+    const cudaError_t sync_err = cudaStreamSynchronize(stream);
+    const auto s1 = std::chrono::steady_clock::now();
+    const uint64_t sync_ms =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(s1 - s0).count());
+    const cudaError_t post_err = cudaPeekAtLastError();
+    std::cerr << std::fixed << std::setprecision(1);
+    std::cerr << "[parakeet_trt] debug_sync engine=" << e.name
+              << " id=" << (ctx ? ctx->id : "")
+              << " utt_seq=" << (ctx ? ctx->utt_seq : 0)
+              << " audio_chunk_idx=" << (ctx ? ctx->audio_chunk_idx : 0)
+              << " feature_idx=" << (ctx ? ctx->feature_idx : 0)
+              << " enqueue_ok=" << (ok ? 1 : 0)
+              << " enqueue_ms=" << elapsed_ms
+              << " sync_ms=" << sync_ms
+              << " sync_err=" << cudaGetErrorString(sync_err)
+              << " post_err=" << cudaGetErrorString(post_err)
+              << " enqueue_err=" << cudaGetErrorString(peek_err)
+              << "\n";
+    std::cerr.unsetf(std::ios::floatfield);
+  }
   if (slow || !ok || peek_err != cudaSuccess) {
     const double mb = 1024.0 * 1024.0;
     const bool mem_ok = mem_before_err == cudaSuccess && mem_after_err == cudaSuccess;
