@@ -95,6 +95,68 @@ void log_slow_enqueue_config_once() {
   });
 }
 
+enum class SlotReuseMode {
+  kLog,
+  kWait,
+  kFail,
+};
+
+struct SlotReuseConfig {
+  bool enabled = false;
+  SlotReuseMode mode = SlotReuseMode::kLog;
+  uint64_t log_limit = 4;
+  uint64_t slot_cap_override = 0;
+};
+
+SlotReuseMode parse_slot_reuse_mode(const char* v, SlotReuseMode fallback) {
+  if (!v || !*v) return fallback;
+  const std::string s(v);
+  if (s == "log") return SlotReuseMode::kLog;
+  if (s == "wait") return SlotReuseMode::kWait;
+  if (s == "fail") return SlotReuseMode::kFail;
+  return fallback;
+}
+
+const char* slot_reuse_mode_name(SlotReuseMode mode) {
+  switch (mode) {
+    case SlotReuseMode::kLog:
+      return "log";
+    case SlotReuseMode::kWait:
+      return "wait";
+    case SlotReuseMode::kFail:
+      return "fail";
+    default:
+      return "log";
+  }
+}
+
+SlotReuseConfig get_slot_reuse_config() {
+  static SlotReuseConfig cfg = []() {
+    SlotReuseConfig out{};
+    const char* mode_env = std::getenv("PARAKEET_SLOT_REUSE_MODE");
+    if (mode_env && *mode_env) {
+      out.enabled = true;
+      out.mode = parse_slot_reuse_mode(mode_env, SlotReuseMode::kLog);
+    }
+    out.enabled = get_env_bool("PARAKEET_SLOT_REUSE_CHECK", out.enabled);
+    out.log_limit = get_env_u64("PARAKEET_SLOT_REUSE_LOG_THRESHOLD", 4);
+    out.slot_cap_override = get_env_u64("PARAKEET_SLOT_REUSE_CAP", 0);
+    return out;
+  }();
+  return cfg;
+}
+
+void log_slot_reuse_config_once() {
+  static std::once_flag once;
+  std::call_once(once, []() {
+    const auto cfg = get_slot_reuse_config();
+    if (!cfg.enabled) return;
+    std::cerr << "[parakeet_trt] slot_reuse_check=1 mode=" << slot_reuse_mode_name(cfg.mode)
+              << " log_limit=" << cfg.log_limit
+              << " slot_cap_override=" << cfg.slot_cap_override << "\n";
+  });
+}
+
 class Logger final : public nvinfer1::ILogger {
  public:
   void log(Severity severity, const char* msg) noexcept override {
@@ -161,6 +223,13 @@ using TrtUniquePtr = std::unique_ptr<T, TrtDeleter>;
 struct DeviceBuffer {
   void* ptr = nullptr;
   size_t bytes = 0;
+};
+
+struct DebugContext {
+  std::string id;
+  uint64_t utt_seq = 0;
+  uint64_t audio_chunk_idx = 0;
+  uint64_t feature_idx = 0;
 };
 
 static void cuda_check(cudaError_t e, const char* what) {
@@ -253,6 +322,10 @@ struct TrtEngine {
   TrtUniquePtr<nvinfer1::IExecutionContext> ctx;
   std::vector<DeviceBuffer> bufs;
   std::map<std::string, void*> tensors;
+  std::vector<cudaEvent_t> slot_events;
+  std::vector<uint8_t> slot_event_ready;
+  uint64_t slot_seq = 0;
+  uint64_t slot_log_count = 0;
 };
 
 const char* dtype_name(nvinfer1::DataType dt) {
@@ -371,8 +444,120 @@ static void allocate_buffers_for_current_shapes(TrtEngine& e, cudaStream_t strea
 #endif
 }
 
-static void enqueue_or_throw(TrtEngine& e, cudaStream_t stream) {
+static size_t slot_reuse_cap_for_engine(const TrtEngine& e) {
+  const auto cfg = get_slot_reuse_config();
+  if (cfg.slot_cap_override > 0) {
+    return static_cast<size_t>(cfg.slot_cap_override);
+  }
+  return e.bufs.size();
+}
+
+static void ensure_slot_events(TrtEngine& e, size_t cap) {
+  if (cap == 0) return;
+  if (e.slot_events.size() == cap) return;
+  for (auto ev : e.slot_events) {
+    if (ev) cudaEventDestroy(ev);
+  }
+  e.slot_events.clear();
+  e.slot_event_ready.clear();
+  e.slot_events.resize(cap, nullptr);
+  e.slot_event_ready.resize(cap, 0);
+  for (size_t i = 0; i < cap; ++i) {
+    cudaEvent_t ev{};
+    const cudaError_t err = cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+      std::cerr << "[parakeet_trt] slot_reuse_event_create_failed engine=" << e.name
+                << " slot=" << i << " err=" << cudaGetErrorString(err) << "\n";
+      continue;
+    }
+    e.slot_events[i] = ev;
+  }
+}
+
+static void destroy_slot_events(TrtEngine& e) {
+  for (auto ev : e.slot_events) {
+    if (ev) cudaEventDestroy(ev);
+  }
+  e.slot_events.clear();
+  e.slot_event_ready.clear();
+  e.slot_seq = 0;
+  e.slot_log_count = 0;
+}
+
+static void slot_reuse_check_before_enqueue(TrtEngine& e,
+                                            cudaStream_t stream,
+                                            const DebugContext* ctx,
+                                            size_t* slot_out) {
+  const auto cfg = get_slot_reuse_config();
+  if (!cfg.enabled) return;
+  const size_t cap = slot_reuse_cap_for_engine(e);
+  if (cap == 0) return;
+  ensure_slot_events(e, cap);
+  if (e.slot_events.empty()) return;
+  const size_t slot = static_cast<size_t>(e.slot_seq % cap);
+  if (slot_out) *slot_out = slot;
+  if (slot >= e.slot_events.size() || !e.slot_event_ready[slot] || !e.slot_events[slot]) {
+    return;
+  }
+  const cudaError_t q = cudaEventQuery(e.slot_events[slot]);
+  if (q == cudaErrorNotReady) {
+    if (cfg.log_limit > 0 && e.slot_log_count < cfg.log_limit) {
+      e.slot_log_count++;
+      std::cerr << "[parakeet_trt] slot_reuse_inflight engine=" << e.name
+                << " id=" << (ctx ? ctx->id : "")
+                << " utt_seq=" << (ctx ? ctx->utt_seq : 0)
+                << " audio_chunk_idx=" << (ctx ? ctx->audio_chunk_idx : 0)
+                << " feature_idx=" << (ctx ? ctx->feature_idx : 0)
+                << " slot=" << slot << " cap=" << cap
+                << " mode=" << slot_reuse_mode_name(cfg.mode)
+                << " stream=0x" << std::hex << reinterpret_cast<uintptr_t>(stream) << std::dec
+                << "\n";
+    }
+    if (cfg.mode == SlotReuseMode::kWait) {
+      cudaEventSynchronize(e.slot_events[slot]);
+    } else if (cfg.mode == SlotReuseMode::kFail) {
+      throw std::runtime_error("slot reuse detected (in-flight event)");
+    }
+  } else if (q != cudaSuccess) {
+    if (cfg.log_limit > 0 && e.slot_log_count < cfg.log_limit) {
+      e.slot_log_count++;
+      std::cerr << "[parakeet_trt] slot_reuse_query_err engine=" << e.name
+                << " id=" << (ctx ? ctx->id : "")
+                << " utt_seq=" << (ctx ? ctx->utt_seq : 0)
+                << " audio_chunk_idx=" << (ctx ? ctx->audio_chunk_idx : 0)
+                << " feature_idx=" << (ctx ? ctx->feature_idx : 0)
+                << " slot=" << slot << " cap=" << cap
+                << " err=" << cudaGetErrorString(q)
+                << " stream=0x" << std::hex << reinterpret_cast<uintptr_t>(stream) << std::dec
+                << "\n";
+    }
+  }
+}
+
+static void slot_reuse_record_after_enqueue(TrtEngine& e,
+                                            cudaStream_t stream,
+                                            size_t slot) {
+  const auto cfg = get_slot_reuse_config();
+  if (!cfg.enabled) return;
+  if (e.slot_events.empty() || slot >= e.slot_events.size() || !e.slot_events[slot]) {
+    return;
+  }
+  const cudaError_t rec = cudaEventRecord(e.slot_events[slot], stream);
+  if (rec != cudaSuccess && cfg.log_limit > 0 && e.slot_log_count < cfg.log_limit) {
+    e.slot_log_count++;
+    std::cerr << "[parakeet_trt] slot_reuse_record_err engine=" << e.name
+              << " slot=" << slot << " err=" << cudaGetErrorString(rec) << "\n";
+  } else {
+    e.slot_event_ready[slot] = 1;
+  }
+  e.slot_seq = e.slot_seq + 1;
+}
+
+static void enqueue_or_throw(TrtEngine& e, cudaStream_t stream, const DebugContext* ctx) {
 #if NV_TENSORRT_MAJOR >= 10
+  log_slot_reuse_config_once();
+  size_t slot_idx = 0;
+  slot_reuse_check_before_enqueue(e, stream, ctx, &slot_idx);
   const auto t0 = std::chrono::steady_clock::now();
   size_t free_before = 0;
   size_t total_before = 0;
@@ -410,6 +595,7 @@ static void enqueue_or_throw(TrtEngine& e, cudaStream_t stream) {
       dump_engine_bindings(e, stream);
     }
   }
+  slot_reuse_record_after_enqueue(e, stream, slot_idx);
   if (!ok) {
     throw std::runtime_error("enqueueV3 failed for engine: " + e.name);
   }
@@ -463,6 +649,8 @@ struct ParakeetSession {
 
   // Streaming decode state: last token id fed into predictor (carried across push_features calls).
   int32_t y_id = kBlankId;
+
+  DebugContext debug;
 
   // Predictor state buffers (device pointers).
   void* d_h = nullptr;
@@ -598,6 +786,9 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
 
 void parakeet_destroy_session(ParakeetSession* session) {
   if (!session) return;
+  destroy_slot_events(session->enc);
+  destroy_slot_events(session->pred);
+  destroy_slot_events(session->joint);
   if (session->stream) {
     cudaStreamDestroy(session->stream);
     session->stream = nullptr;
@@ -619,7 +810,7 @@ void parakeet_reset_utterance(ParakeetSession* session) {
     const int64_t host_y = static_cast<int64_t>(tok);
     cuda_check(cudaMemcpyAsync(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream),
                "cudaMemcpyAsync(y_prime)");
-    enqueue_or_throw(session->pred, session->stream);
+    enqueue_or_throw(session->pred, session->stream, &session->debug);
     cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_prime)");
     const size_t h_bytes = volume(session->pred.ctx->getTensorShape("h")) * dtype_size(session->pred.engine->getTensorDataType("h"));
     const size_t c_bytes = volume(session->pred.ctx->getTensorShape("c")) * dtype_size(session->pred.engine->getTensorDataType("c"));
@@ -653,6 +844,22 @@ void parakeet_reset_utterance(ParakeetSession* session) {
 
   std::lock_guard<std::mutex> lock(session->event_mutex);
   while (!session->event_queue.empty()) session->event_queue.pop();
+}
+
+void parakeet_set_debug_context(ParakeetSession* session,
+                                const char* id,
+                                uint64_t utt_seq,
+                                uint64_t audio_chunk_idx,
+                                uint64_t feature_idx) {
+  if (!session) return;
+  if (id) {
+    session->debug.id = id;
+  } else {
+    session->debug.id.clear();
+  }
+  session->debug.utt_seq = utt_seq;
+  session->debug.audio_chunk_idx = audio_chunk_idx;
+  session->debug.feature_idx = feature_idx;
 }
 
 int parakeet_push_features(ParakeetSession* session, const float* features_bct_f32, size_t num_frames) {
@@ -712,7 +919,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     }
 
     // Run encoder.
-    enqueue_or_throw(session->enc, session->stream);
+    enqueue_or_throw(session->enc, session->stream, &session->debug);
     cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(encoder)");
 
     // Read encoded length.
@@ -791,7 +998,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
       for (int u = 0; u < max_symbols_per_timestep && time_idx < T_enc; ++u) {
         // Run joint using the cached predictor output `g` (session->d_joint_pred_in).
-        enqueue_or_throw(session->joint, session->stream);
+        enqueue_or_throw(session->joint, session->stream, &session->debug);
         cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(joint)");
 
         // Copy logits for (t=0,u=0) to host.
@@ -931,7 +1138,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           const int64_t host_y = static_cast<int64_t>(best_tok);
           cuda_check(cudaMemcpyAsync(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream),
                      "cudaMemcpyAsync(y)");
-          enqueue_or_throw(session->pred, session->stream);
+          enqueue_or_throw(session->pred, session->stream, &session->debug);
           cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor)");
 
           cuda_check(cudaMemcpyAsync(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream),

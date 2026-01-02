@@ -54,6 +54,13 @@ impl ParakeetSessionSafe {
         Ok(())
     }
 
+    pub fn set_debug_context(&self, id: &str, utt_seq: u64, audio_chunk_idx: u64, feature_idx: u64) {
+        let c_id = CString::new(id).unwrap_or_else(|_| CString::new("").unwrap());
+        unsafe {
+            parakeet_set_debug_context(self.inner, c_id.as_ptr(), utt_seq, audio_chunk_idx, feature_idx);
+        }
+    }
+
     pub fn poll_event(&self) -> Option<TranscriptionEvent> {
         let mut event = ParakeetEvent {
             type_: 0,
