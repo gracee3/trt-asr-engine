@@ -216,6 +216,13 @@ void log_debug_sync_config_once() {
   });
 }
 
+struct DebugContext {
+  std::string id;
+  uint64_t utt_seq = 0;
+  uint64_t audio_chunk_idx = 0;
+  uint64_t feature_idx = 0;
+};
+
 enum class DebugDeviceSyncPoint {
   kPush,
   kDestroy,
@@ -299,13 +306,6 @@ void debug_device_sync(DebugDeviceSyncPoint point, const char* label, const Debu
             << " post_err=" << cudaGetErrorString(post_err)
             << "\n";
 }
-
-struct DebugContext {
-  std::string id;
-  uint64_t utt_seq = 0;
-  uint64_t audio_chunk_idx = 0;
-  uint64_t feature_idx = 0;
-};
 
 struct DebugMemcpyConfig {
   bool enabled = false;
