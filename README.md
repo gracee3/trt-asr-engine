@@ -121,6 +121,15 @@ Expected outputs:
 - `models/parakeet-tdt-0.6b-v3/build_report.json`
 - `models/parakeet-tdt-0.6b-v3/build_logs/*.log`
 
+### 6) Build the C++ runtime (libparakeet_trt.so)
+
+```bash
+cmake -S cpp -B cpp/build
+cmake --build cpp/build -j
+```
+
+The shared library will be at `cpp/build/libparakeet_trt.so`.
+
 ## Repository structure
 
 - **`tools/`**: dev tooling pipeline
@@ -147,4 +156,3 @@ This repository **does not redistribute model weights**.
   - TensorRT engine build + packaging (including external ONNX data)
   - streaming C++ decode loop integration
   - Rust CLI polish and integration into larger systems
-

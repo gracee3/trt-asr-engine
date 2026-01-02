@@ -15,6 +15,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -58,6 +59,15 @@ bool get_debug_topk() {
     return false;
   }
   return std::string(v) == "1";
+}
+
+bool get_env_bool(const char* name, bool fallback) {
+  const char* v = std::getenv(name);
+  if (!v || !*v) return fallback;
+  const std::string s(v);
+  if (s == "1" || s == "true" || s == "yes" || s == "on") return true;
+  if (s == "0" || s == "false" || s == "no" || s == "off") return false;
+  return fallback;
 }
 
 uint64_t get_env_u64(const char* name, uint64_t fallback) {
@@ -245,6 +255,56 @@ struct TrtEngine {
   std::map<std::string, void*> tensors;
 };
 
+const char* dtype_name(nvinfer1::DataType dt) {
+  switch (dt) {
+    case nvinfer1::DataType::kFLOAT:
+      return "f32";
+    case nvinfer1::DataType::kHALF:
+      return "f16";
+    case nvinfer1::DataType::kINT8:
+      return "i8";
+    case nvinfer1::DataType::kINT32:
+      return "i32";
+    case nvinfer1::DataType::kBOOL:
+      return "bool";
+    default:
+      return "unknown";
+  }
+}
+
+std::string dims_to_string(const nvinfer1::Dims& d) {
+  std::ostringstream oss;
+  oss << "[";
+  for (int i = 0; i < d.nbDims; ++i) {
+    if (i > 0) oss << "x";
+    oss << d.d[i];
+  }
+  oss << "]";
+  return oss.str();
+}
+
+void dump_engine_bindings(const TrtEngine& e, cudaStream_t stream) {
+  const int nb = e.engine->getNbIOTensors();
+  std::ostringstream oss;
+  oss << "[parakeet_trt] bindings engine=" << e.name << " stream=0x"
+      << std::hex << reinterpret_cast<uintptr_t>(stream) << std::dec;
+  for (int i = 0; i < nb; ++i) {
+    const char* tn = e.engine->getIOTensorName(i);
+    const auto dims = e.ctx->getTensorShape(tn);
+    const auto dt = e.engine->getTensorDataType(tn);
+    const size_t bytes = volume(dims) * dtype_size(dt);
+    void* ptr = nullptr;
+    const auto it = e.tensors.find(tn);
+    if (it != e.tensors.end()) {
+      ptr = it->second;
+    }
+    oss << " " << tn << "=0x" << std::hex << reinterpret_cast<uintptr_t>(ptr)
+        << std::dec << " dims=" << dims_to_string(dims)
+        << " dtype=" << dtype_name(dt) << " bytes=" << bytes;
+  }
+  std::cerr << oss.str() << "\n";
+}
+
 static void set_input_shape_or_throw(TrtEngine& e, const char* name, const std::vector<int32_t>& dims) {
   nvinfer1::Dims d{};
   d.nbDims = static_cast<int>(dims.size());
@@ -327,6 +387,9 @@ static void enqueue_or_throw(TrtEngine& e, cudaStream_t stream) {
               << " cuda_err=" << cudaGetErrorString(peek_err)
               << "\n";
     std::cerr.unsetf(std::ios::floatfield);
+    if (get_env_bool("PARAKEET_DUMP_BINDINGS_ON_SLOW", false)) {
+      dump_engine_bindings(e, stream);
+    }
   }
   if (!ok) {
     throw std::runtime_error("enqueueV3 failed for engine: " + e.name);
