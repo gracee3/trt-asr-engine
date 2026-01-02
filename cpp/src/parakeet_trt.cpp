@@ -59,6 +59,22 @@ bool get_debug_topk() {
   return std::string(v) == "1";
 }
 
+uint64_t get_env_u64(const char* name, uint64_t fallback) {
+  const char* v = std::getenv(name);
+  if (!v || !*v) return fallback;
+  try {
+    return static_cast<uint64_t>(std::stoull(v));
+  } catch (...) {
+    return fallback;
+  }
+}
+
+uint64_t get_slow_enqueue_ms() {
+  const uint64_t from_env = get_env_u64("PARAKEET_SLOW_ENQUEUE_MS", 0);
+  if (from_env > 0) return from_env;
+  return get_env_u64("PARAKEET_SLOW_CHUNK_MS", 250);
+}
+
 class Logger final : public nvinfer1::ILogger {
  public:
   void log(Severity severity, const char* msg) noexcept override {
@@ -268,7 +284,34 @@ static void allocate_buffers_for_current_shapes(TrtEngine& e, cudaStream_t strea
 
 static void enqueue_or_throw(TrtEngine& e, cudaStream_t stream) {
 #if NV_TENSORRT_MAJOR >= 10
+  const auto t0 = std::chrono::steady_clock::now();
+  size_t free_before = 0;
+  size_t total_before = 0;
+  const cudaError_t mem_before_err = cudaMemGetInfo(&free_before, &total_before);
   if (!e.ctx->enqueueV3(stream)) throw std::runtime_error("enqueueV3 failed for engine: " + e.name);
+  const auto t1 = std::chrono::steady_clock::now();
+  const uint64_t elapsed_ms =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+  size_t free_after = 0;
+  size_t total_after = 0;
+  const cudaError_t mem_after_err = cudaMemGetInfo(&free_after, &total_after);
+  const cudaError_t peek_err = cudaPeekAtLastError();
+  const uint64_t slow_ms = get_slow_enqueue_ms();
+  if (slow_ms > 0 && elapsed_ms >= slow_ms) {
+    const double mb = 1024.0 * 1024.0;
+    const double free_before_mb = static_cast<double>(free_before) / mb;
+    const double free_after_mb = static_cast<double>(free_after) / mb;
+    const double delta_mb = free_before_mb - free_after_mb;
+    std::cerr << "[parakeet_trt] slow_enqueue engine=" << e.name
+              << " enqueue_ms=" << elapsed_ms
+              << " mem_free_before_mb=" << free_before_mb
+              << " mem_free_after_mb=" << free_after_mb
+              << " mem_delta_mb=" << delta_mb
+              << " mem_before_err=" << cudaGetErrorString(mem_before_err)
+              << " mem_after_err=" << cudaGetErrorString(mem_after_err)
+              << " cuda_err=" << cudaGetErrorString(peek_err)
+              << "\n";
+  }
 #else
   (void)stream;
   throw std::runtime_error("TensorRT < 10 not supported by this demo runtime");
