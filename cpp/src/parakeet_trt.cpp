@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -73,6 +74,15 @@ uint64_t get_slow_enqueue_ms() {
   const uint64_t from_env = get_env_u64("PARAKEET_SLOW_ENQUEUE_MS", 0);
   if (from_env > 0) return from_env;
   return get_env_u64("PARAKEET_SLOW_CHUNK_MS", 250);
+}
+
+void log_slow_enqueue_config_once() {
+  static std::once_flag once;
+  std::call_once(once, []() {
+    const uint64_t slow_ms = get_slow_enqueue_ms();
+    std::cerr << "[parakeet_trt] slow_enqueue_ms=" << slow_ms
+              << " (env PARAKEET_SLOW_ENQUEUE_MS or PARAKEET_SLOW_CHUNK_MS)\n";
+  });
 }
 
 class Logger final : public nvinfer1::ILogger {
@@ -288,7 +298,7 @@ static void enqueue_or_throw(TrtEngine& e, cudaStream_t stream) {
   size_t free_before = 0;
   size_t total_before = 0;
   const cudaError_t mem_before_err = cudaMemGetInfo(&free_before, &total_before);
-  if (!e.ctx->enqueueV3(stream)) throw std::runtime_error("enqueueV3 failed for engine: " + e.name);
+  const bool ok = e.ctx->enqueueV3(stream);
   const auto t1 = std::chrono::steady_clock::now();
   const uint64_t elapsed_ms =
       static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
@@ -297,20 +307,29 @@ static void enqueue_or_throw(TrtEngine& e, cudaStream_t stream) {
   const cudaError_t mem_after_err = cudaMemGetInfo(&free_after, &total_after);
   const cudaError_t peek_err = cudaPeekAtLastError();
   const uint64_t slow_ms = get_slow_enqueue_ms();
-  if (slow_ms > 0 && elapsed_ms >= slow_ms) {
+  const bool slow = slow_ms > 0 && elapsed_ms >= slow_ms;
+  if (slow || !ok || peek_err != cudaSuccess) {
     const double mb = 1024.0 * 1024.0;
-    const double free_before_mb = static_cast<double>(free_before) / mb;
-    const double free_after_mb = static_cast<double>(free_after) / mb;
-    const double delta_mb = free_before_mb - free_after_mb;
-    std::cerr << "[parakeet_trt] slow_enqueue engine=" << e.name
+    const bool mem_ok = mem_before_err == cudaSuccess && mem_after_err == cudaSuccess;
+    const double free_before_mb = mem_ok ? static_cast<double>(free_before) / mb : -1.0;
+    const double free_after_mb = mem_ok ? static_cast<double>(free_after) / mb : -1.0;
+    const double delta_mb = mem_ok ? (free_before_mb - free_after_mb) : 0.0;
+    std::cerr << std::fixed << std::setprecision(1);
+    std::cerr << "[parakeet_trt] enqueueV3 engine=" << e.name
               << " enqueue_ms=" << elapsed_ms
+              << " slow_ms=" << slow_ms
+              << " ok=" << (ok ? 1 : 0)
               << " mem_free_before_mb=" << free_before_mb
               << " mem_free_after_mb=" << free_after_mb
-              << " mem_delta_mb=" << delta_mb
+              << " mem_delta_mb=" << (mem_ok ? delta_mb : 0.0)
               << " mem_before_err=" << cudaGetErrorString(mem_before_err)
               << " mem_after_err=" << cudaGetErrorString(mem_after_err)
               << " cuda_err=" << cudaGetErrorString(peek_err)
               << "\n";
+    std::cerr.unsetf(std::ios::floatfield);
+  }
+  if (!ok) {
+    throw std::runtime_error("enqueueV3 failed for engine: " + e.name);
   }
 #else
   (void)stream;
@@ -402,6 +421,7 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
   if (!config || !config->model_dir) return nullptr;
   try {
     auto session = std::make_unique<ParakeetSession>(config);
+    log_slow_enqueue_config_once();
 
     cuda_check(cudaSetDevice(session->device_id), "cudaSetDevice");
     cuda_check(cudaStreamCreate(&session->stream), "cudaStreamCreate");
