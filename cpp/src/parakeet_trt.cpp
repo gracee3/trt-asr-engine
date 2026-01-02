@@ -307,6 +307,67 @@ void debug_device_sync(DebugDeviceSyncPoint point, const char* label, const Debu
             << "\n";
 }
 
+// ---------------------------------------------------------------------------
+// Stage Markers: Ultra-low-latency unbuffered logging for hang diagnosis.
+// Enable with PARAKEET_DEBUG_STAGE_MARKERS=1
+// ---------------------------------------------------------------------------
+struct StageMarkerConfig {
+  bool enabled = false;
+};
+
+StageMarkerConfig get_stage_marker_config() {
+  static StageMarkerConfig cfg = []() {
+    StageMarkerConfig out{};
+    out.enabled = get_env_bool("PARAKEET_DEBUG_STAGE_MARKERS", false);
+    return out;
+  }();
+  return cfg;
+}
+
+void ensure_stderr_unbuffered() {
+  static std::once_flag once;
+  std::call_once(once, []() {
+    setvbuf(stderr, NULL, _IONBF, 0);
+  });
+}
+
+void log_stage_marker_config_once() {
+  static std::once_flag once;
+  std::call_once(once, []() {
+    const auto cfg = get_stage_marker_config();
+    if (!cfg.enabled) return;
+    ensure_stderr_unbuffered();
+    std::cerr << "[parakeet_trt] stage_markers=1 (unbuffered stderr)\n";
+  });
+}
+
+static std::chrono::steady_clock::time_point g_stage_marker_start;
+static std::once_flag g_stage_marker_start_once;
+
+void debug_stage_marker(const char* stage, const DebugContext* ctx, cudaStream_t stream = nullptr, int loop_idx = -1) {
+  const auto cfg = get_stage_marker_config();
+  if (!cfg.enabled) return;
+  log_stage_marker_config_once();
+  std::call_once(g_stage_marker_start_once, []() {
+    g_stage_marker_start = std::chrono::steady_clock::now();
+  });
+  const auto now = std::chrono::steady_clock::now();
+  const uint64_t ms_since_start = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(now - g_stage_marker_start).count());
+  std::cerr << "[parakeet_trt] stage=" << (stage ? stage : "")
+            << " id=" << (ctx ? ctx->id : "")
+            << " utt_seq=" << (ctx ? ctx->utt_seq : 0)
+            << " audio_chunk_idx=" << (ctx ? ctx->audio_chunk_idx : 0)
+            << " feature_idx=" << (ctx ? ctx->feature_idx : 0);
+  if (loop_idx >= 0) {
+    std::cerr << " loop_idx=" << loop_idx;
+  }
+  if (stream) {
+    std::cerr << " stream=0x" << std::hex << reinterpret_cast<uintptr_t>(stream) << std::dec;
+  }
+  std::cerr << " ms=" << ms_since_start << "\n";
+}
+
 struct DebugMemcpyConfig {
   bool enabled = false;
   bool sync = false;
@@ -1289,6 +1350,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
   if (!session || !features_bct_f32) return -1;
   if (num_frames == 0) return 0;
   try {
+    debug_stage_marker("push_features:enter", &session->debug, session->stream);
     // #region agent log
     dbglog_ndjson(
         "H8",
@@ -1344,8 +1406,11 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     }
 
     // Run encoder.
+    debug_stage_marker("enc:pre_enqueue", &session->debug, session->stream);
     enqueue_or_throw(session->enc, session->stream, &session->debug);
+    debug_stage_marker("enc:post_enqueue", &session->debug, session->stream);
     cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(encoder)");
+    debug_stage_marker("enc:post_sync", &session->debug, session->stream);
 
     // Read encoded length.
     int64_t enc_len_host = 0;
@@ -1428,8 +1493,11 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
       for (int u = 0; u < max_symbols_per_timestep && time_idx < T_enc; ++u) {
         // Run joint using the cached predictor output `g` (session->d_joint_pred_in).
+        debug_stage_marker("joint:pre_enqueue", &session->debug, session->stream, time_idx);
         enqueue_or_throw(session->joint, session->stream, &session->debug);
+        debug_stage_marker("joint:post_enqueue", &session->debug, session->stream, time_idx);
         cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(joint)");
+        debug_stage_marker("joint:post_sync", &session->debug, session->stream, time_idx);
 
         // Copy logits for (t=0,u=0) to host.
         if (joint_out_dt == nvinfer1::DataType::kHALF) {
@@ -1572,8 +1640,11 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           const int64_t host_y = static_cast<int64_t>(best_tok);
           debug_memcpy_async(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream,
                              "predictor:y", &session->debug);
+          debug_stage_marker("pred:pre_enqueue", &session->debug, session->stream, time_idx);
           enqueue_or_throw(session->pred, session->stream, &session->debug);
+          debug_stage_marker("pred:post_enqueue", &session->debug, session->stream, time_idx);
           cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor)");
+          debug_stage_marker("pred:post_sync", &session->debug, session->stream, time_idx);
 
           debug_memcpy_async(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream,
                              "predictor:h_out->h", &session->debug);
@@ -1582,6 +1653,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           debug_memcpy_async(session->d_joint_pred_in, session->d_g, g_bytes, cudaMemcpyDeviceToDevice, session->stream,
                              "predictor:g->joint_pred", &session->debug);
           cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_commit)");
+          debug_stage_marker("pred:post_commit", &session->debug, session->stream, time_idx);
 
           y_id = best_tok;
           continue;  // stay on the same encoder timestep, try emitting more symbols
@@ -1647,6 +1719,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
             ",\"cleared_punct_state\":" + std::string(cleared_punct_state ? "true" : "false") + "}");
     // #endregion
 
+    debug_stage_marker("push_features:before_return", &session->debug, session->stream);
     debug_device_sync(DebugDeviceSyncPoint::kPush, "push_features:end", &session->debug);
 
     return 0;
