@@ -1,4 +1,5 @@
 import argparse
+import dataclasses
 import os
 import torch
 import json
@@ -40,6 +41,198 @@ def _onnx_io_summary(path: str):
     ins = [{"name": i.name, "dims": _dims(i)} for i in m.graph.input]
     outs = [{"name": o.name, "dims": _dims(o)} for o in m.graph.output]
     return ins, outs
+
+def _parse_int_list(value: str):
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    return [int(p) for p in parts]
+
+def _select_streaming_chunk_len(streaming_cfg, fallback: int):
+    if streaming_cfg is None:
+        return fallback
+    chunk_size = getattr(streaming_cfg, "chunk_size", None)
+    if chunk_size is None:
+        return fallback
+    if isinstance(chunk_size, (list, tuple)):
+        return int(max(chunk_size))
+    return int(chunk_size)
+
+def _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size):
+    cfg = getattr(encoder, "streaming_cfg", None)
+    if cfg is None:
+        logger.warning("Encoder has no streaming_cfg; cache-aware export may be unavailable.")
+        return None
+    updates = {}
+    if cache_size is not None:
+        updates["last_channel_cache_size"] = cache_size
+    if chunk_size:
+        updates["chunk_size"] = chunk_size
+    if shift_size:
+        updates["shift_size"] = shift_size
+    if not updates:
+        return cfg
+    if dataclasses.is_dataclass(cfg):
+        encoder.streaming_cfg = dataclasses.replace(cfg, **updates)
+    else:
+        for key, value in updates.items():
+            if hasattr(cfg, key):
+                setattr(cfg, key, value)
+    logger.info(f"Updated encoder.streaming_cfg for streaming export: {encoder.streaming_cfg}")
+    return getattr(encoder, "streaming_cfg", cfg)
+
+def _call_setup_streaming_params(encoder):
+    if not hasattr(encoder, "setup_streaming_params"):
+        return
+    setup_fn = encoder.setup_streaming_params
+    sig = inspect.signature(setup_fn)
+    params = [p for p in sig.parameters.values() if p.name != "self"]
+    if not params:
+        setup_fn()
+        return
+    names = {p.name for p in params}
+    if "streaming_cfg" in names:
+        setup_fn(streaming_cfg=encoder.streaming_cfg)
+        return
+    if "cfg" in names:
+        setup_fn(cfg=encoder.streaming_cfg)
+        return
+    raise RuntimeError(f"Unsupported setup_streaming_params signature: {sig}")
+
+def _call_get_initial_cache_state(encoder, batch_size: int):
+    if not hasattr(encoder, "get_initial_cache_state"):
+        raise RuntimeError("Encoder does not expose get_initial_cache_state()")
+    fn = encoder.get_initial_cache_state
+    sig = inspect.signature(fn)
+    params = [p for p in sig.parameters.values() if p.name != "self"]
+    if not params:
+        return fn()
+    if any(p.name == "batch_size" for p in params):
+        return fn(batch_size=batch_size)
+    return fn(batch_size)
+
+def _call_cache_aware_stream_step(encoder, x, x_len, cache_state):
+    cache_last_channel, cache_last_time, cache_last_channel_len = cache_state
+    fn = encoder.cache_aware_stream_step
+    sig = inspect.signature(fn)
+    params = [p for p in sig.parameters.values() if p.name != "self"]
+    names = [p.name for p in params]
+
+    def _pick(candidates):
+        for name in candidates:
+            if name in names:
+                return name
+        return None
+
+    audio_name = _pick(["x", "audio_signal", "features", "input_signal"])
+    length_name = _pick(["x_len", "length", "input_length", "audio_signal_length", "feature_length"])
+    cache_channel_name = _pick(["cache_last_channel"])
+    cache_time_name = _pick(["cache_last_time"])
+    cache_len_name = _pick(["cache_last_channel_len"])
+
+    if audio_name or length_name:
+        kwargs = {}
+        if audio_name:
+            kwargs[audio_name] = x
+        if length_name:
+            kwargs[length_name] = x_len
+        if cache_channel_name:
+            kwargs[cache_channel_name] = cache_last_channel
+        if cache_time_name:
+            kwargs[cache_time_name] = cache_last_time
+        if cache_len_name:
+            kwargs[cache_len_name] = cache_last_channel_len
+        missing = [
+            p.name
+            for p in params
+            if p.default is inspect._empty and p.name not in kwargs
+        ]
+        if missing:
+            raise RuntimeError(
+                f"cache_aware_stream_step missing required args {missing}; "
+                f"signature={sig}"
+            )
+        return fn(**kwargs)
+
+    if len(params) >= 5:
+        return fn(x, x_len, cache_last_channel, cache_last_time, cache_last_channel_len)
+    if len(params) == 4:
+        return fn(x, x_len, cache_last_channel, cache_last_time)
+    if len(params) == 3:
+        return fn(x, x_len, cache_last_channel)
+    raise RuntimeError(f"Unsupported cache_aware_stream_step signature: {sig}")
+
+def _call_streaming_post_process(encoder, step_out):
+    if not hasattr(encoder, "streaming_post_process"):
+        return step_out
+    fn = encoder.streaming_post_process
+    sig = inspect.signature(fn)
+    params = [p for p in sig.parameters.values() if p.name != "self"]
+    if not params:
+        return fn()
+    step_tuple = step_out if isinstance(step_out, (tuple, list)) else (step_out,)
+    if len(params) == 1:
+        return fn(step_tuple if len(step_tuple) > 1 else step_tuple[0])
+    if len(params) == len(step_tuple):
+        return fn(*step_tuple)
+    names = [p.name for p in params]
+    positional = {
+        0: ["encoder_output", "encoder_out", "x", "encoded", "encoded_output"],
+        1: ["encoded_length", "encoder_output_length", "x_len", "length", "encoded_len"],
+        2: ["cache_last_channel"],
+        3: ["cache_last_time"],
+        4: ["cache_last_channel_len"],
+    }
+    value_by_name = {}
+    for idx, candidates in positional.items():
+        if idx >= len(step_tuple):
+            continue
+        for name in candidates:
+            value_by_name[name] = step_tuple[idx]
+    kwargs = {}
+    for name in names:
+        if name in value_by_name:
+            kwargs[name] = value_by_name[name]
+    missing = [
+        p.name
+        for p in params
+        if p.default is inspect._empty and p.name not in kwargs
+    ]
+    if missing:
+        if len(step_tuple) >= len(params):
+            return fn(*step_tuple[: len(params)])
+        raise RuntimeError(
+            f"streaming_post_process missing required args {missing}; "
+            f"signature={sig}"
+        )
+    return fn(**kwargs)
+
+def _normalize_streaming_outputs(step_out):
+    if not isinstance(step_out, (tuple, list)) or len(step_out) < 5:
+        raise RuntimeError(f"Expected >=5 streaming outputs, got {type(step_out)} len={len(step_out) if isinstance(step_out, (tuple, list)) else 'n/a'}")
+    return step_out[0], step_out[1], step_out[2], step_out[3], step_out[4]
+
+class StreamingEncoderWrapper(torch.nn.Module):
+    def __init__(self, encoder, use_post_process: bool):
+        super().__init__()
+        self.encoder = encoder
+        self.use_post_process = use_post_process
+
+    def forward(
+        self,
+        audio_signal,
+        length,
+        cache_last_channel,
+        cache_last_time,
+        cache_last_channel_len,
+    ):
+        out = _call_cache_aware_stream_step(
+            self.encoder,
+            audio_signal,
+            length,
+            (cache_last_channel, cache_last_time, cache_last_channel_len),
+        )
+        if self.use_post_process:
+            out = _call_streaming_post_process(self.encoder, out)
+        return _normalize_streaming_outputs(out)
 
 class ExportHeartbeat(threading.Thread):
     def __init__(self, interval=5):
@@ -294,6 +487,85 @@ def export_encoder(model, out_dir, device, dynamic=True):
     logger.info(f"Finished writing: {path}")
     validate_onnx(path)
 
+def export_encoder_streaming(
+    model,
+    out_dir,
+    device,
+    dynamic=True,
+    cache_size=256,
+    chunk_size=None,
+    shift_size=None,
+    dummy_len=0,
+    use_post_process=True,
+):
+    stage = "Exporting Encoder (Streaming Cache-Aware)"
+    logger.info(f"Starting: {stage}")
+
+    encoder = model.encoder
+    if hasattr(encoder, "export_cache_support"):
+        encoder.export_cache_support = True
+        logger.info("encoder.export_cache_support set to True")
+    else:
+        logger.warning("encoder.export_cache_support not found; continuing without it")
+
+    cfg = _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size)
+    _call_setup_streaming_params(encoder)
+
+    n_mels = model.cfg.preprocessor.get('features', 128)
+    time_steps = dummy_len or _select_streaming_chunk_len(cfg, fallback=64)
+    dummy_input = torch.randn(1, n_mels, time_steps).to(device)
+    dummy_len_tensor = torch.LongTensor([time_steps]).to(device)
+
+    cache_state = _call_get_initial_cache_state(encoder, batch_size=1)
+    cache_state = tuple(
+        t.to(device) if torch.is_tensor(t) else t for t in cache_state
+    )
+    if len(cache_state) < 3:
+        raise RuntimeError(f"Expected 3 cache tensors, got {len(cache_state)}")
+
+    wrapper = StreamingEncoderWrapper(encoder, use_post_process=use_post_process).to(device)
+
+    path = os.path.join(out_dir, "encoder_streaming.onnx")
+    dynamic_axes = None
+    if dynamic:
+        dynamic_axes = {
+            'audio_signal': {0: 'batch', 2: 'time'},
+            'length': {0: 'batch'},
+            'cache_last_channel': {1: 'batch'},
+            'cache_last_time': {1: 'batch'},
+            'cache_last_channel_len': {0: 'batch'},
+            'encoder_output': {0: 'batch', 2: 'time'},
+            'encoded_lengths': {0: 'batch'},
+            'cache_last_channel_out': {1: 'batch'},
+            'cache_last_time_out': {1: 'batch'},
+            'cache_last_channel_len_out': {0: 'batch'},
+        }
+
+    logger.info("Calling torch.onnx.export for streaming encoder...")
+    _export_onnx_legacy(
+        wrapper,
+        (dummy_input, dummy_len_tensor, cache_state[0], cache_state[1], cache_state[2]),
+        path,
+        input_names=[
+            'audio_signal',
+            'length',
+            'cache_last_channel',
+            'cache_last_time',
+            'cache_last_channel_len',
+        ],
+        output_names=[
+            'encoder_output',
+            'encoded_lengths',
+            'cache_last_channel_out',
+            'cache_last_time_out',
+            'cache_last_channel_len_out',
+        ],
+        dynamic_axes=dynamic_axes,
+        opset_version=18,
+    )
+    logger.info(f"Finished writing: {path}")
+    validate_onnx(path)
+
 def export_predictor(model, out_dir, device):
     stage = "Exporting Predictor"
     logger.info(f"Starting: {stage}")
@@ -451,10 +723,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True, help="Path to .nemo file")
     parser.add_argument("--out", type=str, default="out", help="Output directory")
-    parser.add_argument("--component", type=str, choices=['encoder', 'predictor', 'joint', 'all'], default='all')
+    parser.add_argument("--component", type=str, choices=['encoder', 'predictor', 'joint', 'encoder_streaming', 'all'], default='all')
     parser.add_argument("--fixed", action='store_true', help="Export with fixed shapes (no dynamic axes)")
     parser.add_argument("--device", type=str, choices=["cpu", "cuda"], default="cpu", help="Export device (default: cpu)")
     parser.add_argument("--smoke-test-ort", action="store_true", help="Run minimal ONNX Runtime smoke test after export")
+    parser.add_argument("--streaming-cache-size", type=int, default=256, help="Streaming encoder cache size (last_channel_cache_size)")
+    parser.add_argument("--streaming-chunk-size", type=str, default="", help="Override encoder.streaming_cfg.chunk_size (comma-separated)")
+    parser.add_argument("--streaming-shift-size", type=str, default="", help="Override encoder.streaming_cfg.shift_size (comma-separated)")
+    parser.add_argument("--streaming-dummy-len", type=int, default=0, help="Override dummy chunk length for streaming export")
+    parser.add_argument("--streaming-no-postprocess", action="store_true", help="Skip streaming_post_process in streaming encoder export")
     args = parser.parse_args()
 
     # Start Heartbeat
@@ -544,6 +821,21 @@ def main():
                 if comp == 'encoder':
                     export_encoder(model, args.out, device, dynamic=not args.fixed)
                     exported.append(os.path.join(args.out, "encoder.onnx"))
+                elif comp == 'encoder_streaming':
+                    chunk_size = _parse_int_list(args.streaming_chunk_size) if args.streaming_chunk_size else None
+                    shift_size = _parse_int_list(args.streaming_shift_size) if args.streaming_shift_size else None
+                    export_encoder_streaming(
+                        model,
+                        args.out,
+                        device,
+                        dynamic=not args.fixed,
+                        cache_size=args.streaming_cache_size,
+                        chunk_size=chunk_size,
+                        shift_size=shift_size,
+                        dummy_len=args.streaming_dummy_len,
+                        use_post_process=not args.streaming_no_postprocess,
+                    )
+                    exported.append(os.path.join(args.out, "encoder_streaming.onnx"))
                 elif comp == 'predictor':
                     export_predictor(model, args.out, device)
                     exported.append(os.path.join(args.out, "predictor.onnx"))

@@ -6,6 +6,7 @@ This tool exports the individual components of a Parakeet-TDT `.nemo` model to O
 1.  **Encoder**: Audio signal processing.
 2.  **Predictor**: Token/Language model part.
 3.  **Joint**: Combines encoder and predictor outputs to produce logits and durations (TDT spec).
+4.  **Streaming Encoder (cache-aware)**: Encoder with explicit cache inputs/outputs for true streaming.
 
 ## Setup
 ```bash
@@ -42,10 +43,33 @@ python -u export.py \
   --smoke-test-ort
 ```
 
+To export a cache-aware streaming encoder (explicit cache I/O):
+
+```bash
+python -u export.py \
+  --model ../../models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
+  --out ./out \
+  --component encoder_streaming \
+  --streaming-cache-size 256 \
+  --device cpu
+```
+
 ## Expected Shapes (Example for 0.6B)
 - **Encoder**: 
   - Input: `audio_signal [B, 128, T]` and `length [1]` (**as exported**)
   - Outputs: `encoder_output [B, 1024, T_enc]` and `encoded_lengths [1]`
+- **Streaming Encoder**:
+  - Inputs:
+    - `audio_signal [B, 128, T]` and `length [B]`
+    - `cache_last_channel [L, B, cache_T, 1024]`
+    - `cache_last_time [L, B, 1024, C]`
+    - `cache_last_channel_len [B]`
+  - Outputs:
+    - `encoder_output [B, 1024, T_enc]`
+    - `encoded_lengths [B]`
+    - `cache_last_channel_out [L, B, cache_T, 1024]`
+    - `cache_last_time_out [L, B, 1024, C]`
+    - `cache_last_channel_len_out [B]`
 - **Predictor**:
   - Inputs:
     - `y`: token IDs `[B, U]` (typically streaming uses `U=1`)
