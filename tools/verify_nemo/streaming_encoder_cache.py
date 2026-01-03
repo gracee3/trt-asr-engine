@@ -299,6 +299,9 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--sweep-chunk-lens", type=str, default="", help="Comma-separated chunk lengths to test (chunk 0 only)")
     parser.add_argument("--no-assert-cache-len", action="store_true", help="Skip cache_len non-negative assertion")
+    parser.add_argument("--use-streaming-cfg-schedule", action="store_true", help="Use streaming_cfg chunk/shift/pre-encode schedule")
+    parser.add_argument("--ab-test-chunk", type=int, default=-1, help="Run cache usefulness A/B test at this chunk index")
+    parser.add_argument("--skip-setup-streaming-params", action="store_true", help="Skip encoder.setup_streaming_params call")
     args = parser.parse_args()
 
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -342,11 +345,12 @@ def main():
     else:
         print("WARN: encoder has no streaming_cfg; cache-aware streaming may be unavailable.")
 
-    _call_setup_streaming_params(encoder)
-    # setup_streaming_params resets streaming_cfg; reapply the cache size override.
-    if hasattr(encoder, "streaming_cfg") and hasattr(encoder.streaming_cfg, "last_channel_cache_size"):
-        encoder.streaming_cfg.last_channel_cache_size = args.cache_size
-        print(f"Post-setup streaming_cfg: {encoder.streaming_cfg}")
+    if not args.skip_setup_streaming_params:
+        _call_setup_streaming_params(encoder)
+        # setup_streaming_params resets streaming_cfg; reapply the cache size override.
+        if hasattr(encoder, "streaming_cfg") and hasattr(encoder.streaming_cfg, "last_channel_cache_size"):
+            encoder.streaming_cfg.last_channel_cache_size = args.cache_size
+            print(f"Post-setup streaming_cfg: {encoder.streaming_cfg}")
 
     feature_dim = int(model.cfg.preprocessor.features)
     default_chunk_len = args.chunk_len or _select_chunk_len(
@@ -396,18 +400,87 @@ def main():
         print(f"  pre_encode_cache_size={pre_encode_cache_size} drop_extra_pre_encoded={drop_extra_pre_encoded}")
         print(f"  enc_len_pre - cache_drop_size={diff_drop} enc_len_pre - (cache_drop+valid)={diff_drop_valid}")
 
+    def _normalize_pair(value, fallback):
+        if value is None:
+            return [fallback, fallback]
+        if isinstance(value, (list, tuple)):
+            if len(value) >= 2:
+                return [value[0], value[1]]
+            if len(value) == 1:
+                return [value[0], value[0]]
+            return [fallback, fallback]
+        return [value, value]
+
+    def _build_schedule(num_chunks, chunk_len_default):
+        cfg = getattr(encoder, "streaming_cfg", None)
+        chunk_sizes = _normalize_pair(getattr(cfg, "chunk_size", None) if cfg else None, chunk_len_default)
+        shift_sizes = _normalize_pair(getattr(cfg, "shift_size", None) if cfg else None, chunk_sizes[1])
+        pre_encode_sizes = _normalize_pair(getattr(cfg, "pre_encode_cache_size", None) if cfg else None, 0)
+
+        schedule = []
+        start = 0
+        for idx in range(num_chunks):
+            regime = 0 if idx == 0 else 1
+            chunk_size = int(chunk_sizes[regime])
+            shift_size = int(shift_sizes[regime])
+            pre_encode = int(pre_encode_sizes[regime])
+            slice_start = max(0, start - pre_encode)
+            slice_end = start + chunk_size
+            schedule.append(
+                {
+                    "idx": idx,
+                    "start": start,
+                    "chunk_size": chunk_size,
+                    "shift_size": shift_size,
+                    "pre_encode": pre_encode,
+                    "slice_start": slice_start,
+                    "slice_end": slice_end,
+                }
+            )
+            start += shift_size
+        total_frames = max(item["slice_end"] for item in schedule) if schedule else chunk_len_default
+        return schedule, total_frames
+
+    def _ab_test_diff(a, b, label):
+        if not torch.is_tensor(a) or not torch.is_tensor(b):
+            print(f"{label} diff: <non-tensor>")
+            return
+        diff = (a.to(torch.float32) - b.to(torch.float32)).abs()
+        print(f"{label} diff: max={diff.max().item():.6f} mean={diff.mean().item():.6f}")
+
     def _run_sequence(chunk_len, num_chunks):
-        x = torch.randn(1, feature_dim, chunk_len, device=device)
-        x_len = torch.tensor([chunk_len], dtype=torch.int64, device=device)
         cache_state = _call_get_initial_cache_state(encoder, batch_size=1)
         cache_state = tuple(
             t.to(device) if torch.is_tensor(t) else t for t in cache_state
         )
         _describe_value("initial_cache_state", cache_state)
 
+        if args.use_streaming_cfg_schedule:
+            schedule, total_frames = _build_schedule(num_chunks, chunk_len)
+            feature_buffer = torch.randn(1, feature_dim, total_frames, device=device)
+        else:
+            schedule = None
+            feature_buffer = torch.randn(1, feature_dim, chunk_len, device=device)
+
         with torch.no_grad():
             for idx in range(num_chunks):
+                if schedule:
+                    item = schedule[idx]
+                    x = feature_buffer[:, :, item["slice_start"] : item["slice_end"]]
+                    x_len_val = item["slice_end"] - item["slice_start"]
+                else:
+                    x = feature_buffer
+                    x_len_val = chunk_len
+                x_len = torch.tensor([x_len_val], dtype=torch.int64, device=device)
+
                 print(f"\n=== Chunk {idx} ===")
+                if schedule:
+                    print(
+                        f"schedule: start={item['start']} chunk_size={item['chunk_size']} "
+                        f"shift_size={item['shift_size']} pre_encode={item['pre_encode']} "
+                        f"slice=[{item['slice_start']}, {item['slice_end']})"
+                    )
+
                 step_out = _call_cache_aware_stream_step(encoder, x, x_len, cache_state)
                 _describe_value("cache_aware_stream_step out", step_out)
 
@@ -415,7 +488,23 @@ def main():
                 if post_out is not step_out:
                     _describe_value("streaming_post_process out", post_out)
 
-                _log_chunk_summary("chunk", step_out, post_out, chunk_len)
+                if args.ab_test_chunk == idx:
+                    reset_cache = _call_get_initial_cache_state(encoder, batch_size=1)
+                    reset_cache = tuple(
+                        t.to(device) if torch.is_tensor(t) else t for t in reset_cache
+                    )
+                    step_out_reset = _call_cache_aware_stream_step(encoder, x, x_len, reset_cache)
+                    post_out_reset = _call_streaming_post_process(encoder, step_out_reset)
+                    print("A/B test (threaded vs reset caches):")
+                    if isinstance(post_out, (tuple, list)) and isinstance(post_out_reset, (tuple, list)):
+                        _ab_test_diff(post_out[0], post_out_reset[0], "encoder_output")
+                        _ab_test_diff(post_out[2], post_out_reset[2], "cache_last_channel")
+                        _ab_test_diff(post_out[3], post_out_reset[3], "cache_last_time")
+                        _ab_test_diff(post_out[4], post_out_reset[4], "cache_last_channel_len")
+                    else:
+                        print("A/B test: unexpected output structure")
+
+                _log_chunk_summary("chunk", step_out, post_out, x_len_val)
                 cache_state = _extract_cache_state(post_out)
                 _describe_value("next_cache_state", cache_state)
                 if not args.no_assert_cache_len:
