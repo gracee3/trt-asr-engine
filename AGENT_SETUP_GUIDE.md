@@ -393,3 +393,18 @@ When running TRT integration validation, verify:
 - [ONNX_ORT_PARITY_README.md](ONNX_ORT_PARITY_README.md) - Overview and quick start
 - [contracts/encoder_streaming.contract.json](contracts/encoder_streaming.contract.json) - Binding specification
 - [CACHE_TIME_ROOT_CAUSE_ANALYSIS.md](CACHE_TIME_ROOT_CAUSE_ANALYSIS.md) - Known issue deep-dive
+
+---
+
+## Next Phase: Magnolia Integration
+
+Once TRT validation is complete, proceed to Magnolia integration:
+
+**Handoff document:** [MAGNOLIA_INTEGRATION_HANDOFF.md](MAGNOLIA_INTEGRATION_HANDOFF.md)
+
+This covers:
+- Live captions pipeline (Audio → DSP → parakeet_stt → Transcription)
+- Partials vs finals (stable prefix + revision window)
+- Low-latency engineering constraints
+- Multi-engine roadmap
+- LLM integration rules

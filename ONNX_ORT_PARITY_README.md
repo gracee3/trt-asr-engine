@@ -276,4 +276,4 @@ assert cache_last_channel_len_out == 0
 **ONNX Validation:** ✅ Complete
 **TRT Integration:** ✅ Complete (2026-01-03)
 **FP16 Evaluation:** ✅ Complete (2026-01-03)
-**Next Milestone:** Real audio validation, CI/CD integration, production deployment
+**Next Milestone:** Magnolia integration (see [MAGNOLIA_INTEGRATION_HANDOFF.md](MAGNOLIA_INTEGRATION_HANDOFF.md))
