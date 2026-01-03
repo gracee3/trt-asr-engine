@@ -1,0 +1,176 @@
+{
+  "model": {
+    "source": "models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo",
+    "class": "EncDecRNNTBPEModel"
+  },
+  "versions": {
+    "torch": "2.9.1+cu128",
+    "nemo": "2.6.0"
+  },
+  "encoder": {
+    "class": "ConformerEncoder",
+    "cfg": {
+      "_target_": "nemo.collections.asr.modules.ConformerEncoder",
+      "feat_in": 128,
+      "feat_out": -1,
+      "n_layers": 24,
+      "d_model": 1024,
+      "use_bias": false,
+      "subsampling": "dw_striding",
+      "subsampling_factor": 8,
+      "subsampling_conv_channels": 256,
+      "causal_downsampling": false,
+      "reduction": null,
+      "reduction_position": null,
+      "reduction_factor": 1,
+      "ff_expansion_factor": 4,
+      "self_attention_model": "rel_pos",
+      "n_heads": 8,
+      "att_context_size": [
+        -1,
+        -1
+      ],
+      "att_context_style": "regular",
+      "xscaling": false,
+      "untie_biases": true,
+      "pos_emb_max_len": 5000,
+      "conv_kernel_size": 9,
+      "conv_norm_type": "batch_norm",
+      "conv_context_size": null,
+      "dropout": 0.1,
+      "dropout_pre_encoder": 0.1,
+      "dropout_emb": 0.0,
+      "dropout_att": 0.1,
+      "stochastic_depth_drop_prob": 0.0,
+      "stochastic_depth_mode": "linear",
+      "stochastic_depth_start_layer": 1
+    },
+    "pos_emb_max_len": 5000,
+    "streaming_cfg": {
+      "chunk_size": [
+        577,
+        584
+      ],
+      "shift_size": [
+        1,
+        8
+      ],
+      "cache_drop_size": 72,
+      "last_channel_cache_size": 10000,
+      "valid_out_len": 1,
+      "pre_encode_cache_size": [
+        0,
+        9
+      ],
+      "drop_extra_pre_encoded": 2,
+      "last_channel_num": 0,
+      "last_time_num": 0
+    },
+    "conv_kernel_sizes": [
+      [
+        1
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        3,
+        3
+      ],
+      [
+        9
+      ]
+    ],
+    "depthwise_conv_count": 26,
+    "subsampling_conv_count": 0,
+    "subsampling_factor_inferred": 8.0,
+    "attention_context": "rel_pos"
+  },
+  "decoder": {
+    "class": "RNNTDecoder",
+    "cfg": {
+      "_target_": "nemo.collections.asr.modules.RNNTDecoder",
+      "normalization_mode": null,
+      "random_state_sampling": false,
+      "blank_as_pad": true,
+      "prednet": {
+        "pred_hidden": 640,
+        "pred_rnn_layers": 2,
+        "t_max": null,
+        "dropout": 0.2
+      },
+      "vocab_size": 8192
+    }
+  },
+  "joint": {
+    "class": "RNNTJoint",
+    "num_classes_with_blank": 8198,
+    "duration_values": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "duration_modules": []
+  },
+  "checks": [
+    {
+      "id": "fastconformer_subsampling_factor_8",
+      "desc": "FastConformer subsampling factor should be 8x",
+      "value": 8,
+      "expected": 8,
+      "status": "pass"
+    },
+    {
+      "id": "fastconformer_kernel_size_9",
+      "desc": "Conformer conv kernel size should be 9",
+      "value": 9,
+      "expected": 9,
+      "status": "pass"
+    },
+    {
+      "id": "fastconformer_subsampling_channels_256",
+      "desc": "Subsampling conv channels should be 256",
+      "value": 256,
+      "expected": 256,
+      "status": "pass"
+    },
+    {
+      "id": "tdt_duration_head_present",
+      "desc": "TDT duration head/values should be present",
+      "value": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": "present",
+      "status": "pass"
+    },
+    {
+      "id": "cache_aware_streaming_api",
+      "desc": "Encoder exposes cache-aware streaming hooks",
+      "value": {
+        "cache_aware_stream_step": true,
+        "get_initial_cache_state": true,
+        "setup_streaming_params": true,
+        "streaming_post_process": true
+      },
+      "expected": "all_true",
+      "status": "pass"
+    },
+    {
+      "id": "pos_emb_vs_cache_size",
+      "desc": "last_channel_cache_size should not exceed pos_emb_max_len",
+      "value": {
+        "pos_emb_max_len": 5000,
+        "last_channel_cache_size": 10000
+      },
+      "expected": "cache_size <= pos_emb_max_len",
+      "status": "warn"
+    }
+  ]
+}

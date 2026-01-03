@@ -24,6 +24,13 @@ python streaming_encoder_cache.py \
   --num-chunks 3
 ```
 
+### Model architecture audit (FastConformer/TDT checks)
+```bash
+python audit_model_arch.py \
+  --model ../../models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
+  --out audit_model_arch.json
+```
+
 ### Requirements
 - Input WAV should be 16kHz, mono, 16-bit PCM for best results.
 - CUDA is recommended but the script will fallback to CPU if unavailable.

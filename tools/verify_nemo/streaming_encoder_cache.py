@@ -46,6 +46,45 @@ def _select_chunk_len(streaming_cfg, fallback):
         return int(max(chunk_size))
     return int(chunk_size)
 
+def _infer_chunk_shift_steps(encoder, streaming_cfg):
+    if streaming_cfg is None:
+        return None, None
+    chunk = getattr(streaming_cfg, "chunk_size", None)
+    shift = getattr(streaming_cfg, "shift_size", None)
+    cache_drop = getattr(streaming_cfg, "cache_drop_size", None)
+    subsampling = getattr(encoder, "subsampling_factor", None) or 1
+
+    if hasattr(encoder, "pre_encode") and hasattr(encoder.pre_encode, "get_sampling_frames"):
+        sampling_frames = encoder.pre_encode.get_sampling_frames()
+    else:
+        sampling_frames = 0
+
+    chunk_max = max(chunk) if isinstance(chunk, (list, tuple)) else chunk
+    sampling_max = max(sampling_frames) if isinstance(sampling_frames, (list, tuple)) else sampling_frames
+    if chunk_max is None or sampling_max is None or subsampling <= 0:
+        return None, None
+
+    try:
+        lookahead_steps = int(round((chunk_max - sampling_max) / subsampling))
+        chunk_steps = lookahead_steps + 1
+    except Exception:
+        return None, None
+
+    shift_steps = None
+    if cache_drop is not None:
+        shift_steps = int(chunk_steps - cache_drop)
+        if shift_steps < 1:
+            shift_steps = 1
+    elif shift is not None:
+        shift_max = max(shift) if isinstance(shift, (list, tuple)) else shift
+        if shift_max is not None and sampling_max is not None and subsampling > 0:
+            try:
+                lookahead_shift = int(round((shift_max - sampling_max) / subsampling))
+                shift_steps = lookahead_shift + 1
+            except Exception:
+                shift_steps = None
+    return chunk_steps, shift_steps
+
 
 def _call_setup_streaming_params(encoder):
     if not hasattr(encoder, "setup_streaming_params"):
@@ -62,6 +101,33 @@ def _call_setup_streaming_params(encoder):
         return
     if "cfg" in names:
         setup_fn(cfg=encoder.streaming_cfg)
+        return
+    # Fallback: pass explicit chunk/shift when signature expects them.
+    if "chunk_size" in names or "shift_size" in names:
+        cfg = getattr(encoder, "streaming_cfg", None)
+        kwargs = {}
+        inferred_chunk, inferred_shift = _infer_chunk_shift_steps(encoder, cfg)
+        if "chunk_size" in names:
+            value = inferred_chunk
+            if value is None:
+                value = getattr(cfg, "chunk_size", None) if cfg is not None else None
+                if isinstance(value, (list, tuple)):
+                    value = int(max(value)) if value else None
+            kwargs["chunk_size"] = value
+        if "shift_size" in names:
+            value = inferred_shift
+            if value is None:
+                value = getattr(cfg, "shift_size", None) if cfg is not None else None
+                if isinstance(value, (list, tuple)):
+                    value = int(max(value)) if value else None
+            kwargs["shift_size"] = value
+        if "left_chunks" in names:
+            kwargs["left_chunks"] = getattr(cfg, "left_chunks", None) if cfg is not None else None
+        if "att_context_size" in names:
+            kwargs["att_context_size"] = getattr(cfg, "att_context_size", None) if cfg is not None else None
+        if "max_context" in names:
+            kwargs["max_context"] = getattr(cfg, "max_context", None) if cfg is not None else None
+        setup_fn(**kwargs)
         return
     raise RuntimeError(f"Unsupported setup_streaming_params signature: {sig}")
 
@@ -143,6 +209,8 @@ def _call_streaming_post_process(encoder, step_out):
         return fn()
 
     step_tuple = step_out if isinstance(step_out, (tuple, list)) else (step_out,)
+    if params and params[0].name == "rets":
+        return fn(step_tuple)
     if len(params) == 1:
         return fn(step_tuple if len(step_tuple) > 1 else step_tuple[0])
     if len(params) == len(step_tuple):
@@ -267,6 +335,10 @@ def main():
         print("WARN: encoder has no streaming_cfg; cache-aware streaming may be unavailable.")
 
     _call_setup_streaming_params(encoder)
+    # setup_streaming_params resets streaming_cfg; reapply the cache size override.
+    if hasattr(encoder, "streaming_cfg") and hasattr(encoder.streaming_cfg, "last_channel_cache_size"):
+        encoder.streaming_cfg.last_channel_cache_size = args.cache_size
+        print(f"Post-setup streaming_cfg: {encoder.streaming_cfg}")
 
     feature_dim = int(model.cfg.preprocessor.features)
     chunk_len = args.chunk_len or _select_chunk_len(
