@@ -169,7 +169,7 @@
   },
   "validation": {
     "parity_test": "tools/onnxruntime/onnx_streaming_parity.py",
-    "reference_jsonl": "pytorch_reference_50.jsonl",
+    "reference_jsonl": "artifacts/reference/pytorch_reference_50.jsonl",
     "tolerance": {
       "atol": 1e-4,
       "rtol": 1e-4

@@ -153,16 +153,16 @@ Failed chunks: 50 (all due to cache_last_time_out tolerance violations)
 1. **Parity Testing Infrastructure:**
    - `tools/verify_nemo/streaming_encoder_reference.py` - PyTorch reference generator
    - `tools/onnxruntime/onnx_streaming_parity.py` - ORT parity harness
-   - `pytorch_reference_50.jsonl` - Ground truth reference data (3.2GB)
+   - `artifacts/reference/pytorch_reference_50.jsonl` - Ground truth reference data (3.2GB)
 
 2. **TRT Binding Contract:**
    - `contracts/encoder_streaming.contract.json` - I/O shapes, profiles, runtime contract
 
 3. **Test Results:**
-   - `parity_50chunks_functional_cpu.json` - Functional mode (CPU) summary
-   - `parity_50chunks_functional_cuda.json` - Functional mode (CUDA) summary
-   - `parity_50chunks_closedloop_cpu.json` - Closed-loop mode (CPU) summary
-   - `parity_50chunks_closedloop_cuda.json` - Closed-loop mode (CUDA) summary
+   - `artifacts/parity/parity_50chunks_functional_cpu.json` - Functional mode (CPU) summary
+   - `artifacts/parity/parity_50chunks_functional_cuda.json` - Functional mode (CUDA) summary
+   - `artifacts/parity/parity_50chunks_closedloop_cpu.json` - Closed-loop mode (CPU) summary
+   - `artifacts/parity/parity_50chunks_closedloop_cuda.json` - Closed-loop mode (CUDA) summary
 
 ### Usage Examples
 
@@ -170,7 +170,7 @@ Failed chunks: 50 (all due to cache_last_time_out tolerance violations)
 ```bash
 python3 tools/onnxruntime/onnx_streaming_parity.py \
   --onnx out/encoder_streaming.onnx \
-  --ref pytorch_reference_50.jsonl \
+  --ref artifacts/reference/pytorch_reference_50.jsonl \
   --mode functional \
   --providers cuda \
   --max-chunks 50 \
@@ -181,7 +181,7 @@ python3 tools/onnxruntime/onnx_streaming_parity.py \
 ```bash
 python3 tools/onnxruntime/onnx_streaming_parity.py \
   --onnx out/encoder_streaming.onnx \
-  --ref pytorch_reference_50.jsonl \
+  --ref artifacts/reference/pytorch_reference_50.jsonl \
   --mode closed_loop \
   --providers cuda \
   --max-chunks 300 \
@@ -199,7 +199,7 @@ python3 tools/verify_nemo/streaming_encoder_reference.py \
   --num-chunks 300 \
   --seed 42 \
   --skip-setup-streaming-params \
-  --jsonl-out pytorch_reference_300.jsonl
+  --jsonl-out artifacts/reference/pytorch_reference_300.jsonl
 ```
 
 ## TRT Integration Guidance

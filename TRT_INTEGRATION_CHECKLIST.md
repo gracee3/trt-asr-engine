@@ -21,8 +21,8 @@
 - [x] Note tolerance guidance (encoder_output < 5e-4 @ p95)
 
 ### 1.3 Set Up Reference Data
-- [x] Verify `pytorch_reference_50.jsonl` exists (3.2GB)
-- [x] Generate `pytorch_reference_300.jsonl` for long-run stability test:
+- [x] Verify `artifacts/reference/pytorch_reference_50.jsonl` exists (3.2GB)
+- [x] Generate `artifacts/reference/pytorch_reference_300.jsonl` for long-run stability test:
   ```bash
   python3 tools/verify_nemo/streaming_encoder_reference.py \
     --model models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
@@ -32,7 +32,7 @@
     --num-chunks 300 \
     --seed 42 \
     --skip-setup-streaming-params \
-    --jsonl-out pytorch_reference_300.jsonl
+    --jsonl-out artifacts/reference/pytorch_reference_300.jsonl
   ```
 
 ---
@@ -152,9 +152,9 @@ class StreamingEncoderTRT:
   ```bash
   python3 tools/tensorrt/trt_streaming_parity.py \
     --engine out/trt_engines/encoder_streaming_fp32.plan \
-    --ref pytorch_reference_50.jsonl \
+    --ref artifacts/reference/pytorch_reference_50.jsonl \
     --mode functional \
-    --summary-json trt_parity_50chunks_functional.json
+    --summary-json artifacts/parity/trt_parity_50chunks_functional.json
   ```
 - [x] Review results:
   - **PASSED:** All contract assertions (cache_len=0, encoded_len=1, time_dim=1)
@@ -178,9 +178,9 @@ class StreamingEncoderTRT:
   ```bash
   python3 tools/tensorrt/trt_streaming_parity.py \
     --engine out/trt_engines/encoder_streaming_fp32.plan \
-    --ref pytorch_reference_300.jsonl \
+    --ref artifacts/reference/pytorch_reference_300.jsonl \
     --mode closed_loop \
-    --summary-json trt_parity_300chunks_closedloop.json
+    --summary-json artifacts/parity/trt_parity_300chunks_closedloop.json
   ```
 
 ### 4.2 Analyze Stability Metrics
@@ -188,10 +188,10 @@ class StreamingEncoderTRT:
 - [x] Plot error vs chunk_index using [`tools/tensorrt/plot_stability.py`](tools/tensorrt/plot_stability.py):
   ```bash
   python3 tools/tensorrt/plot_stability.py \
-    --summary-json trt_parity_300chunks_closedloop.json \
-    --output-png trt_stability_300chunks.png
+    --summary-json artifacts/parity/trt_parity_300chunks_closedloop.json \
+    --output-png artifacts/stability/trt_stability_300chunks.png
   ```
-- [x] Generated: `trt_stability_300chunks.png`
+- [x] Generated: `artifacts/stability/trt_stability_300chunks.png`
 
 ### 4.3 Acceptance Criteria
 - [x] **No monotonic error growth** (slope = -3e-7 ≈ 0) ✅
@@ -357,13 +357,13 @@ class StreamingEncoderTRT:
 **Generated Artifacts:**
 - `out/trt_engines/encoder_streaming_fp32.plan` - TRT FP32 engine (2.4GB)
 - `out/trt_engines/encoder_streaming_fp16.plan` - TRT FP16 engine (1.2GB)
-- `trt_parity_50chunks_functional.json` - FP32 50-chunk functional test results
-- `trt_parity_50chunks_closedloop.json` - FP32 50-chunk closed-loop results
-- `trt_parity_300chunks_closedloop.json` - FP32 300-chunk stability results
-- `trt_stability_300chunks.png` - FP32 error trend visualization
-- `trt_parity_50chunks_functional_fp16.json` - FP16 50-chunk functional test results
-- `trt_parity_300chunks_closedloop_fp16.json` - FP16 300-chunk stability results
-- `trt_stability_300chunks_fp16.png` - FP16 error trend visualization
+- `artifacts/parity/trt_parity_50chunks_functional.json` - FP32 50-chunk functional test results
+- `artifacts/parity/trt_parity_50chunks_closedloop.json` - FP32 50-chunk closed-loop results
+- `artifacts/parity/trt_parity_300chunks_closedloop.json` - FP32 300-chunk stability results
+- `artifacts/stability/trt_stability_300chunks.png` - FP32 error trend visualization
+- `artifacts/parity/trt_parity_50chunks_functional_fp16.json` - FP16 50-chunk functional test results
+- `artifacts/parity/trt_parity_300chunks_closedloop_fp16.json` - FP16 300-chunk stability results
+- `artifacts/stability/trt_stability_300chunks_fp16.png` - FP16 error trend visualization
 
 **Agent Setup:**
 - [AGENT_SETUP_GUIDE.md](AGENT_SETUP_GUIDE.md) - Comprehensive setup guide for agents

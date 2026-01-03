@@ -24,6 +24,7 @@ apps/trt_runtime_smoke/build_real/
 
 .cursor/debug.log
 out/
+artifacts/
 
 # PyTorch reference data (large JSONL files with base64-encoded tensors)
 pytorch_reference_*.jsonl

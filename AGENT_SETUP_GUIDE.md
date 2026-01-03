@@ -22,7 +22,7 @@ python3 -c "from cuda.bindings import runtime as cudart; print('CUDA bindings OK
 # 4. Run a quick parity test
 python3 tools/tensorrt/trt_streaming_parity.py \
   --engine out/trt_engines/encoder_streaming_fp32.plan \
-  --ref pytorch_reference_50.jsonl \
+  --ref artifacts/reference/pytorch_reference_50.jsonl \
   --mode functional \
   --max-chunks 5
 ```
@@ -89,6 +89,13 @@ pip install tensorrt-cu12 cuda-python numpy onnx onnxruntime-gpu torch nemo-tool
 │       └── encoder_streaming_fp16.plan  # FP16 TRT engine (1.2GB)
 ├── contracts/
 │   └── encoder_streaming.contract.json  # I/O binding specification
+├── artifacts/
+│   ├── reference/
+│   │   ├── pytorch_reference_50.jsonl   # 50-chunk reference data (3.2GB)
+│   │   └── pytorch_reference_300.jsonl  # 300-chunk reference data (20GB)
+│   ├── parity/                          # ORT/TRT parity summaries
+│   ├── stability/                       # Error trend plots
+│   └── diagnostics/                     # Cache mismatch diagnostics
 ├── tools/
 │   ├── tensorrt/
 │   │   ├── trt_streaming_parity.py      # TRT parity test harness
@@ -98,8 +105,6 @@ pip install tensorrt-cu12 cuda-python numpy onnx onnxruntime-gpu torch nemo-tool
 │   │   └── diagnose_cache_time_mismatch.py
 │   └── verify_nemo/
 │       └── streaming_encoder_reference.py  # PyTorch reference generator
-├── pytorch_reference_50.jsonl      # 50-chunk reference data (3.2GB)
-├── pytorch_reference_300.jsonl     # 300-chunk reference data (20GB)
 └── [documentation files]
 ```
 
@@ -127,8 +132,8 @@ pip install tensorrt-cu12 cuda-python numpy onnx onnxruntime-gpu torch nemo-tool
 
 | File | Size | Chunks | Command to Generate |
 |------|------|--------|---------------------|
-| `pytorch_reference_50.jsonl` | 3.2GB | 50 | See "Generate Reference Data" section |
-| `pytorch_reference_300.jsonl` | 20GB | 300 | See "Generate Reference Data" section |
+| `artifacts/reference/pytorch_reference_50.jsonl` | 3.2GB | 50 | See "Generate Reference Data" section |
+| `artifacts/reference/pytorch_reference_300.jsonl` | 20GB | 300 | See "Generate Reference Data" section |
 
 ### Test Tools
 
@@ -165,7 +170,7 @@ python3 tools/verify_nemo/streaming_encoder_reference.py \
   --num-chunks 50 \
   --seed 42 \
   --skip-setup-streaming-params \
-  --jsonl-out pytorch_reference_50.jsonl
+  --jsonl-out artifacts/reference/pytorch_reference_50.jsonl
 ```
 
 **300-chunk reference (required for stability tests):**
@@ -178,7 +183,7 @@ python3 tools/verify_nemo/streaming_encoder_reference.py \
   --num-chunks 300 \
   --seed 42 \
   --skip-setup-streaming-params \
-  --jsonl-out pytorch_reference_300.jsonl
+  --jsonl-out artifacts/reference/pytorch_reference_300.jsonl
 ```
 
 ---
@@ -226,28 +231,28 @@ source .venv/bin/activate
 # 1. FP32 50-chunk functional parity
 python3 tools/tensorrt/trt_streaming_parity.py \
   --engine out/trt_engines/encoder_streaming_fp32.plan \
-  --ref pytorch_reference_50.jsonl \
+  --ref artifacts/reference/pytorch_reference_50.jsonl \
   --mode functional \
-  --summary-json trt_parity_50chunks_functional.json
+  --summary-json artifacts/parity/trt_parity_50chunks_functional.json
 
 # 2. FP32 50-chunk closed-loop parity
 python3 tools/tensorrt/trt_streaming_parity.py \
   --engine out/trt_engines/encoder_streaming_fp32.plan \
-  --ref pytorch_reference_50.jsonl \
+  --ref artifacts/reference/pytorch_reference_50.jsonl \
   --mode closed_loop \
-  --summary-json trt_parity_50chunks_closedloop.json
+  --summary-json artifacts/parity/trt_parity_50chunks_closedloop.json
 
 # 3. FP32 300-chunk stability test
 python3 tools/tensorrt/trt_streaming_parity.py \
   --engine out/trt_engines/encoder_streaming_fp32.plan \
-  --ref pytorch_reference_300.jsonl \
+  --ref artifacts/reference/pytorch_reference_300.jsonl \
   --mode closed_loop \
-  --summary-json trt_parity_300chunks_closedloop.json
+  --summary-json artifacts/parity/trt_parity_300chunks_closedloop.json
 
 # 4. Generate stability plot
 python3 tools/tensorrt/plot_stability.py \
-  --summary-json trt_parity_300chunks_closedloop.json \
-  --output-png trt_stability_300chunks.png
+  --summary-json artifacts/parity/trt_parity_300chunks_closedloop.json \
+  --output-png artifacts/stability/trt_stability_300chunks.png
 ```
 
 ### FP16 Validation
@@ -256,21 +261,21 @@ python3 tools/tensorrt/plot_stability.py \
 # FP16 50-chunk functional
 python3 tools/tensorrt/trt_streaming_parity.py \
   --engine out/trt_engines/encoder_streaming_fp16.plan \
-  --ref pytorch_reference_50.jsonl \
+  --ref artifacts/reference/pytorch_reference_50.jsonl \
   --mode functional \
-  --summary-json trt_parity_50chunks_functional_fp16.json
+  --summary-json artifacts/parity/trt_parity_50chunks_functional_fp16.json
 
 # FP16 300-chunk stability
 python3 tools/tensorrt/trt_streaming_parity.py \
   --engine out/trt_engines/encoder_streaming_fp16.plan \
-  --ref pytorch_reference_300.jsonl \
+  --ref artifacts/reference/pytorch_reference_300.jsonl \
   --mode closed_loop \
-  --summary-json trt_parity_300chunks_closedloop_fp16.json
+  --summary-json artifacts/parity/trt_parity_300chunks_closedloop_fp16.json
 
 # FP16 stability plot
 python3 tools/tensorrt/plot_stability.py \
-  --summary-json trt_parity_300chunks_closedloop_fp16.json \
-  --output-png trt_stability_300chunks_fp16.png
+  --summary-json artifacts/parity/trt_parity_300chunks_closedloop_fp16.json \
+  --output-png artifacts/stability/trt_stability_300chunks_fp16.png
 ```
 
 ---
@@ -368,7 +373,7 @@ When running TRT integration validation, verify:
 - [ ] Python packages installed: `python3 -c "import tensorrt"`
 - [ ] ONNX model exists: `out/encoder_streaming.onnx`
 - [ ] TRT engine exists: `out/trt_engines/encoder_streaming_fp32.plan`
-- [ ] Reference data exists: `pytorch_reference_50.jsonl`
+- [ ] Reference data exists: `artifacts/reference/pytorch_reference_50.jsonl`
 - [ ] Contract file exists: `contracts/encoder_streaming.contract.json`
 - [ ] 50-chunk functional parity: Pass rate > 80%
 - [ ] 300-chunk stability: Trend slope ≈ 0 (< 1e-5)

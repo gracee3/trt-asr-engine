@@ -137,7 +137,7 @@ If `cache_last_time` has errors of 0.01-0.1 and encoder_output is sensitive with
    # Check if cache_last_channel_len is ALWAYS 0 in the reference
    python3 -c "
    import json
-   with open('pytorch_reference_50.jsonl') as f:
+   with open('artifacts/reference/pytorch_reference_50.jsonl') as f:
        for i, line in enumerate(f):
            rec = json.loads(line)
            # Decode and check cache_len_out
@@ -203,7 +203,7 @@ def decode_array(obj):
         return arr.reshape(obj['shape'])
     return np.array(obj)
 
-with open('pytorch_reference_50.jsonl') as f:
+with open('artifacts/reference/pytorch_reference_50.jsonl') as f:
     cache_lens = []
     for line in f:
         rec = json.loads(line)

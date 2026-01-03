@@ -127,9 +127,9 @@ Use profiles from [`contracts/encoder_streaming.contract.json`](contracts/encode
 ```bash
 python3 tools/tensorrt/trt_streaming_parity.py \
   --engine encoder_streaming.plan \
-  --ref pytorch_reference_50.jsonl \
+  --ref artifacts/reference/pytorch_reference_50.jsonl \
   --mode functional \
-  --summary-json trt_parity_functional.json
+  --summary-json artifacts/parity/trt_parity_functional.json
 ```
 
 **Acceptance:**
@@ -141,9 +141,9 @@ python3 tools/tensorrt/trt_streaming_parity.py \
 ```bash
 python3 tools/tensorrt/trt_streaming_parity.py \
   --engine encoder_streaming.plan \
-  --ref pytorch_reference_300.jsonl \
+  --ref artifacts/reference/pytorch_reference_300.jsonl \
   --mode closed_loop \
-  --summary-json trt_parity_closedloop.json
+  --summary-json artifacts/parity/trt_parity_closedloop.json
 ```
 
 **Acceptance:**
@@ -184,7 +184,7 @@ python3 tools/tensorrt/trt_streaming_parity.py \
 - Validation assertions
 
 ### 2. Reference Data
-**File:** `pytorch_reference_50.jsonl` (3.2GB)
+**File:** `artifacts/reference/pytorch_reference_50.jsonl` (3.2GB)
 - 50 chunks @ 592 features/chunk
 - Seed=42 (reproducible)
 - Includes full inputs + outputs (base64-encoded tensors)
@@ -199,7 +199,7 @@ python3 tools/verify_nemo/streaming_encoder_reference.py \
   --num-chunks 300 \
   --seed 42 \
   --skip-setup-streaming-params \
-  --jsonl-out pytorch_reference_300.jsonl
+  --jsonl-out artifacts/reference/pytorch_reference_300.jsonl
 ```
 
 ### 3. Parity Test Harness (Template)
@@ -214,7 +214,7 @@ TRT team should adapt this structure for TensorRT:
 ### 4. Diagnostic Tools
 **Files:**
 - [`tools/onnxruntime/diagnose_cache_time_mismatch.py`](tools/onnxruntime/diagnose_cache_time_mismatch.py)
-- [`cache_time_diagnostic.json`](cache_time_diagnostic.json) (Chunk 10 analysis)
+- [`artifacts/diagnostics/cache_time_diagnostic.json`](artifacts/diagnostics/cache_time_diagnostic.json) (Chunk 10 analysis)
 
 Use if cache behavior changes or errors escalate.
 
@@ -271,7 +271,7 @@ Quantization will introduce additional numerical variance:
 **Validation Artifacts:**
 - [ONNX_PARITY_RESULTS.md](ONNX_PARITY_RESULTS.md) - Full parity test results
 - [CACHE_TIME_ROOT_CAUSE_ANALYSIS.md](CACHE_TIME_ROOT_CAUSE_ANALYSIS.md) - Diagnostic deep-dive
-- [cache_time_diagnostic.json](cache_time_diagnostic.json) - Chunk 10 analysis
+- [artifacts/diagnostics/cache_time_diagnostic.json](artifacts/diagnostics/cache_time_diagnostic.json) - Chunk 10 analysis
 - [contracts/encoder_streaming.contract.json](contracts/encoder_streaming.contract.json) - TRT binding spec
 
 **Next Milestone:** TensorRT engine build + parity validation

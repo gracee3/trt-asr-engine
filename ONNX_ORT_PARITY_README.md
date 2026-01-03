@@ -77,22 +77,22 @@ ONNX export (`encoder_streaming.onnx`) has been validated against PyTorch refere
 
 | File | Size | Purpose | Command |
 |------|------|---------|---------|
-| `pytorch_reference_50.jsonl` | 3.2GB | 50-chunk ground truth | Already generated |
-| `pytorch_reference_300.jsonl` | ~20GB | 300-chunk stability test | See checklist Phase 1.3 |
+| `artifacts/reference/pytorch_reference_50.jsonl` | 3.2GB | 50-chunk ground truth | Already generated |
+| `artifacts/reference/pytorch_reference_300.jsonl` | ~20GB | 300-chunk stability test | See checklist Phase 1.3 |
 
 ### Test Results (Gitignored)
 
 | File | Purpose |
 |------|---------|
-| `parity_50chunks_functional_cpu.json` | ORT functional parity (CPU) |
-| `parity_50chunks_functional_cuda.json` | ORT functional parity (CUDA) |
-| `parity_50chunks_closedloop_cpu.json` | ORT closed-loop parity (CPU) |
-| `parity_50chunks_closedloop_cuda.json` | ORT closed-loop parity (CUDA) |
-| `cache_time_diagnostic.json` | Cache diagnostic analysis (chunk 10) |
-| `trt_parity_50chunks_functional.json` | TRT functional parity (50 chunks) |
-| `trt_parity_50chunks_closedloop.json` | TRT closed-loop parity (50 chunks) |
-| `trt_parity_300chunks_closedloop.json` | TRT stability test (300 chunks) |
-| `trt_stability_300chunks.png` | Error trend visualization |
+| `artifacts/parity/parity_50chunks_functional_cpu.json` | ORT functional parity (CPU) |
+| `artifacts/parity/parity_50chunks_functional_cuda.json` | ORT functional parity (CUDA) |
+| `artifacts/parity/parity_50chunks_closedloop_cpu.json` | ORT closed-loop parity (CPU) |
+| `artifacts/parity/parity_50chunks_closedloop_cuda.json` | ORT closed-loop parity (CUDA) |
+| `artifacts/diagnostics/cache_time_diagnostic.json` | Cache diagnostic analysis (chunk 10) |
+| `artifacts/parity/trt_parity_50chunks_functional.json` | TRT functional parity (50 chunks) |
+| `artifacts/parity/trt_parity_50chunks_closedloop.json` | TRT closed-loop parity (50 chunks) |
+| `artifacts/parity/trt_parity_300chunks_closedloop.json` | TRT stability test (300 chunks) |
+| `artifacts/stability/trt_stability_300chunks.png` | Error trend visualization |
 
 ---
 
