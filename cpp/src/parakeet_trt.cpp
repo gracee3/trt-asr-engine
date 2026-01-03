@@ -33,12 +33,15 @@ constexpr int32_t kBlankId = 8192;
 constexpr int32_t kJointVocabSize = 8198;     // token_logits (8193) + duration_logits (5)
 constexpr int32_t kTokenVocabSize = 8193;     // includes blank_id
 constexpr int32_t kNumDurations = 5;          // duration_values = [0,1,2,3,4]
+constexpr int32_t kEncLayers = 24;
 constexpr int32_t kEncDim = 1024;
 constexpr int32_t kPredDim = 640;
 constexpr int32_t kPredLayers = 2;
 constexpr int32_t kNMels = 128;
 constexpr int32_t kTrtMinT = 16;              // current engine profiles are built with min T=16
 constexpr int32_t kTrtChunkT = 16;            // decode using T=16 joint slices (first timestep)
+constexpr int32_t kCacheSize = 256;
+constexpr int32_t kCacheTime = 4;
 
 static int32_t kDurationValues[kNumDurations] = {0, 1, 2, 3, 4};
 
@@ -700,6 +703,23 @@ static size_t volume(const nvinfer1::Dims& d) {
   return v;
 }
 
+static bool engine_has_tensor(const TrtEngine& e, const char* name) {
+  const int nb = e.engine->getNbIOTensors();
+  for (int i = 0; i < nb; ++i) {
+    const char* tn = e.engine->getIOTensorName(i);
+    if (tn && std::strcmp(tn, name) == 0) return true;
+  }
+  return false;
+}
+
+static void* tensor_ptr_or_throw(const TrtEngine& e, const char* name) {
+  const auto it = e.tensors.find(name);
+  if (it == e.tensors.end() || !it->second) {
+    throw std::runtime_error(std::string("Missing tensor pointer: ") + name);
+  }
+  return it->second;
+}
+
 // Very small FP32->FP16 conversion (sufficient for inference inputs).
 static uint16_t f32_to_fp16(float x) {
   // IEEE754 float -> half, round-to-nearest-even (approx; adequate for inputs).
@@ -1116,6 +1136,8 @@ struct ParakeetSession {
   std::string model_dir;
   int32_t device_id = 0;
   bool use_fp16 = true;
+  bool enc_streaming = false;
+  bool enc_cache_zeroed = false;
 
   TrtUniquePtr<nvinfer1::IRuntime> runtime;
   TrtEngine enc;
@@ -1158,6 +1180,12 @@ struct ParakeetSession {
   void* d_length = nullptr;
   void* d_enc_out = nullptr;
   void* d_enc_len = nullptr;
+  void* d_cache_last_channel = nullptr;
+  void* d_cache_last_time = nullptr;
+  void* d_cache_last_channel_len = nullptr;
+  void* d_cache_last_channel_out = nullptr;
+  void* d_cache_last_time_out = nullptr;
+  void* d_cache_last_channel_len_out = nullptr;
 
   // Event plumbing.
   std::queue<ParakeetEventInternal> event_queue;
@@ -1188,10 +1216,19 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
     session->runtime = TrtUniquePtr<nvinfer1::IRuntime>(nvinfer1::createInferRuntime(gLogger));
     if (!session->runtime) throw std::runtime_error("Failed to create TensorRT runtime");
 
-    auto load = [&](const std::string& name) -> TrtEngine {
+    const char* override_encoder = std::getenv("PARAKEET_STREAMING_ENCODER_PATH");
+    if (!override_encoder || !*override_encoder) {
+      override_encoder = std::getenv("PARAKEET_ENCODER_PATH");
+    }
+    if (override_encoder && *override_encoder) {
+      std::cerr << "[parakeet_trt] encoder_override_path=" << override_encoder << "\n";
+    }
+
+    auto load = [&](const std::string& name, const char* explicit_path) -> TrtEngine {
       TrtEngine e;
       e.name = name;
-      const std::string path = session->model_dir + "/" + name + ".engine";
+      const std::string path =
+          (explicit_path && *explicit_path) ? std::string(explicit_path) : (session->model_dir + "/" + name + ".engine");
       auto data = read_file(path);
       nvinfer1::ICudaEngine* raw_engine = session->runtime->deserializeCudaEngine(data.data(), data.size());
       if (!raw_engine) throw std::runtime_error("Failed to deserialize engine: " + path);
@@ -1202,9 +1239,20 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
       return e;
     };
 
-    session->enc = load("encoder");
-    session->pred = load("predictor");
-    session->joint = load("joint");
+    session->enc = load("encoder", override_encoder);
+    session->pred = load("predictor", nullptr);
+    session->joint = load("joint", nullptr);
+
+    const bool has_cache_ch = engine_has_tensor(session->enc, "cache_last_channel");
+    const bool has_cache_tm = engine_has_tensor(session->enc, "cache_last_time");
+    const bool has_cache_len = engine_has_tensor(session->enc, "cache_last_channel_len");
+    const bool has_cache_len_out = engine_has_tensor(session->enc, "cache_last_channel_len_out");
+    const bool has_cache_ch_out = engine_has_tensor(session->enc, "cache_last_channel_out");
+    const bool has_cache_tm_out = engine_has_tensor(session->enc, "cache_last_time_out");
+    session->enc_streaming = has_cache_ch && has_cache_tm && has_cache_len && has_cache_len_out && has_cache_ch_out && has_cache_tm_out;
+    if (session->enc_streaming) {
+      std::cerr << "[parakeet_trt] encoder_streaming=1\n";
+    }
 
 
     // Tokenizer + decoder.
@@ -1371,23 +1419,67 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
             ",\"y_id_in\":" + std::to_string(session->y_id) + "}");
     // #endregion
 
-    // Encoder engines are currently profiled for 16..256 frames.
-    if (num_frames > 256) {
-      throw std::runtime_error("num_frames exceeds encoder profile max (256) for this demo runtime");
-    }
-
-
     const int32_t T_valid = static_cast<int32_t>(num_frames);
-    const int32_t T_shape = std::max<int32_t>(kTrtMinT, T_valid);
+    int32_t T_shape = T_valid;
+    if (session->enc_streaming) {
+      if (T_valid < 584 || T_valid > 592) {
+        throw std::runtime_error("num_frames must be in [584,592] for streaming encoder");
+      }
+    } else {
+      // Encoder engines are currently profiled for 16..256 frames.
+      if (num_frames > 256) {
+        throw std::runtime_error("num_frames exceeds encoder profile max (256) for this demo runtime");
+      }
+      T_shape = std::max<int32_t>(kTrtMinT, T_valid);
+    }
 
     // Configure encoder shapes for this chunk.
     set_input_shape_or_throw(session->enc, "audio_signal", {1, kNMels, T_shape});
     set_input_shape_or_throw(session->enc, "length", {1});
+    if (session->enc_streaming) {
+      set_input_shape_or_throw(session->enc, "cache_last_channel", {kEncLayers, 1, kCacheSize, kEncDim});
+      set_input_shape_or_throw(session->enc, "cache_last_time", {kEncLayers, 1, kEncDim, kCacheTime});
+      set_input_shape_or_throw(session->enc, "cache_last_channel_len", {1});
+    }
     allocate_buffers_for_current_shapes(session->enc, session->stream);
     session->d_audio = session->enc.tensors["audio_signal"];
     session->d_length = session->enc.tensors["length"];
     session->d_enc_out = session->enc.tensors["encoder_output"];
     session->d_enc_len = session->enc.tensors["encoded_lengths"];
+    if (session->enc_streaming) {
+      void* cache_ch = tensor_ptr_or_throw(session->enc, "cache_last_channel");
+      void* cache_tm = tensor_ptr_or_throw(session->enc, "cache_last_time");
+      void* cache_len = tensor_ptr_or_throw(session->enc, "cache_last_channel_len");
+      void* cache_ch_out = tensor_ptr_or_throw(session->enc, "cache_last_channel_out");
+      void* cache_tm_out = tensor_ptr_or_throw(session->enc, "cache_last_time_out");
+      void* cache_len_out = tensor_ptr_or_throw(session->enc, "cache_last_channel_len_out");
+      if (session->d_cache_last_channel != cache_ch || session->d_cache_last_time != cache_tm ||
+          session->d_cache_last_channel_len != cache_len) {
+        session->enc_cache_zeroed = false;
+      }
+      session->d_cache_last_channel = cache_ch;
+      session->d_cache_last_time = cache_tm;
+      session->d_cache_last_channel_len = cache_len;
+      session->d_cache_last_channel_out = cache_ch_out;
+      session->d_cache_last_time_out = cache_tm_out;
+      session->d_cache_last_channel_len_out = cache_len_out;
+      if (!session->enc_cache_zeroed) {
+        const auto cache_ch_shape = session->enc.ctx->getTensorShape("cache_last_channel");
+        const auto cache_tm_shape = session->enc.ctx->getTensorShape("cache_last_time");
+        const size_t cache_ch_bytes =
+            volume(cache_ch_shape) * dtype_size(session->enc.engine->getTensorDataType("cache_last_channel"));
+        const size_t cache_tm_bytes =
+            volume(cache_tm_shape) * dtype_size(session->enc.engine->getTensorDataType("cache_last_time"));
+        debug_memset_async(session->d_cache_last_channel, 0, cache_ch_bytes, session->stream,
+                           "enc:cache_last_channel_zero", &session->debug);
+        debug_memset_async(session->d_cache_last_time, 0, cache_tm_bytes, session->stream,
+                           "enc:cache_last_time_zero", &session->debug);
+        session->enc_cache_zeroed = true;
+      }
+      const int64_t cache_len_zero = 0;
+      debug_memcpy_async(session->d_cache_last_channel_len, &cache_len_zero, sizeof(cache_len_zero),
+                         cudaMemcpyHostToDevice, session->stream, "enc:cache_len_in", &session->debug);
+    }
 
     // Host -> device: length
     const int64_t host_len = static_cast<int64_t>(T_valid);
@@ -1429,7 +1521,21 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                        "enc:encoded_lengths", &session->debug);
     cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(encoded_lengths)");
     const int32_t T_enc = static_cast<int32_t>(enc_len_host);
-    if (T_enc <= 0 || T_enc > T_shape) throw std::runtime_error("Invalid encoded_lengths from encoder");
+    if (session->enc_streaming) {
+      if (T_enc != 1) {
+        throw std::runtime_error("Streaming contract violated: encoded_lengths != 1");
+      }
+    } else if (T_enc <= 0 || T_enc > T_shape) {
+      throw std::runtime_error("Invalid encoded_lengths from encoder");
+    }
+
+    if (session->enc_streaming) {
+      const auto enc_out_shape = session->enc.ctx->getTensorShape("encoder_output");
+      if (enc_out_shape.nbDims <= 0 || enc_out_shape.d[enc_out_shape.nbDims - 1] != 1) {
+        throw std::runtime_error("Streaming contract violated: encoder_output time_dim != 1 (shape=" +
+                                 dims_to_string(enc_out_shape) + ")");
+      }
+    }
 
     // #region agent log
     dbglog_ndjson(
@@ -1439,6 +1545,20 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         std::string("{\"T_valid\":") + std::to_string(T_valid) + ",\"T_shape\":" +
             std::to_string(T_shape) + ",\"T_enc\":" + std::to_string(T_enc) + "}");
     // #endregion
+
+    if (session->enc_streaming) {
+      const auto cache_len_dt = session->enc.engine->getTensorDataType("cache_last_channel_len_out");
+      if (cache_len_dt != nvinfer1::DataType::kINT64) {
+        throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out dtype != int64");
+      }
+      int64_t cache_len_out_host = -1;
+      debug_memcpy_async(&cache_len_out_host, session->d_cache_last_channel_len_out, sizeof(cache_len_out_host),
+                         cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out", &session->debug);
+      cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(cache_len_out)");
+      if (cache_len_out_host != 0) {
+        throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out != 0");
+      }
+    }
 
     // Copy encoder output to host once for decoding.
     nvinfer1::DataType enc_out_dt = session->enc.engine->getTensorDataType("encoder_output");
@@ -1455,14 +1575,10 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize");
     }
 
-    // STREAMING LIMITATION: The Parakeet TDT encoder was exported without streaming cache support.
-    // Each chunk is encoded independently without context from previous audio frames.
-    // Combined with the predictor's blank-favoring state after token emission, this causes
-    // subsequent chunks to produce mostly blanks. Workarounds tested:
-    //   1. Per-chunk predictor reset: causes hallucination due to independent decoding
-    //   2. High blank penalty: causes massive over-generation of tokens
-    // The proper fix requires re-exporting the encoder with streaming cache inputs/outputs
-    // (cache_last_channel, cache_last_time) from NeMo's streaming API.
+    // STREAMING MODE (chunk-isolated):
+    // The validated contract requires cache_len=0, so we feed zero caches and never
+    // carry cache outputs across chunks. Do not enable inter-chunk caching without
+    // re-running full parity/stability validation.
 
     // Greedy TDT/RNNT decode loop using joint slices (T=16) due to engine min profile.
     //
