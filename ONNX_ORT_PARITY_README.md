@@ -193,8 +193,23 @@ assert cache_last_channel_len_out == 0
 | Total latency (P95) | 25.9ms | — | ✅ |
 | Throughput | 54 qps | — | ✅ |
 
+### ✅ Phase 5: FP16 Evaluation — COMPLETE
+
+**FP16 Engine:** `out/trt_engines/encoder_streaming_fp16.plan` (1.2 GB)
+
+| Metric | FP32 | FP16 | Improvement |
+|--------|------|------|-------------|
+| Engine Size | 2.4GB | 1.2GB | 50% smaller |
+| GPU Latency | 18.6ms | 12.1ms | 35% faster |
+| Throughput | 54 qps | 82 qps | 52% higher |
+| P95 Error | 6.6e-4 | 1.8e-3 | 2.7x higher |
+| Contract Pass | 100% | 100% | Same |
+| Error Accumulation | None | None | ✅ |
+
+**Verdict:** FP16 suitable for production if 2-3x accuracy tradeoff acceptable.
+
 ### Remaining Work
-- [ ] FP16 evaluation (optional accuracy/performance tradeoff)
+- [x] FP16 evaluation — **COMPLETE**
 - [ ] Real audio validation with ground truth transcriptions
 - [ ] CI/CD integration for regression testing
 - [ ] Production deployment
@@ -253,10 +268,12 @@ assert cache_last_channel_len_out == 0
 - ORT parity results: Review [ONNX_PARITY_RESULTS.md](ONNX_PARITY_RESULTS.md)
 - Cache behavior: Review [CACHE_TIME_ROOT_CAUSE_ANALYSIS.md](CACHE_TIME_ROOT_CAUSE_ANALYSIS.md)
 - TRT integration: Follow [TRT_INTEGRATION_CHECKLIST.md](TRT_INTEGRATION_CHECKLIST.md)
+- **Agent setup:** See [AGENT_SETUP_GUIDE.md](AGENT_SETUP_GUIDE.md) for environment, paths, and commands
 
 ---
 
 **Package Generated:** 2026-01-03
 **ONNX Validation:** ✅ Complete
 **TRT Integration:** ✅ Complete (2026-01-03)
-**Next Milestone:** FP16 evaluation, real audio validation, CI/CD integration
+**FP16 Evaluation:** ✅ Complete (2026-01-03)
+**Next Milestone:** Real audio validation, CI/CD integration, production deployment
