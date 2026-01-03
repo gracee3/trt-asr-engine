@@ -19,7 +19,13 @@ def _print_sig(label, fn):
 def _describe_value(prefix, value, *, max_list=6):
     if torch.is_tensor(value):
         shape = list(value.shape)
-        print(f"{prefix}: Tensor shape={shape} dtype={value.dtype} device={value.device}")
+        msg = f"{prefix}: Tensor shape={shape} dtype={value.dtype} device={value.device}"
+        if value.numel() <= 8:
+            try:
+                msg += f" value={value.detach().flatten().tolist()}"
+            except Exception:
+                pass
+        print(msg)
         return
     if isinstance(value, (list, tuple)):
         print(f"{prefix}: {type(value).__name__} len={len(value)}")
@@ -291,6 +297,8 @@ def main():
     parser.add_argument("--chunk-size", type=str, default="", help="Override streaming_cfg.chunk_size (comma-separated)")
     parser.add_argument("--shift-size", type=str, default="", help="Override streaming_cfg.shift_size (comma-separated)")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--sweep-chunk-lens", type=str, default="", help="Comma-separated chunk lengths to test (chunk 0 only)")
+    parser.add_argument("--no-assert-cache-len", action="store_true", help="Skip cache_len non-negative assertion")
     args = parser.parse_args()
 
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -341,33 +349,92 @@ def main():
         print(f"Post-setup streaming_cfg: {encoder.streaming_cfg}")
 
     feature_dim = int(model.cfg.preprocessor.features)
-    chunk_len = args.chunk_len or _select_chunk_len(
+    default_chunk_len = args.chunk_len or _select_chunk_len(
         getattr(encoder, "streaming_cfg", None), fallback=584
     )
-    print(f"Using chunk_len={chunk_len} feature_dim={feature_dim}")
+    print(f"Using default chunk_len={default_chunk_len} feature_dim={feature_dim}")
 
-    x = torch.randn(1, feature_dim, chunk_len, device=device)
-    x_len = torch.tensor([chunk_len], dtype=torch.int64, device=device)
+    def _print_streaming_cfg_summary():
+        cfg = getattr(encoder, "streaming_cfg", None)
+        if cfg is None:
+            return
+        print("streaming_cfg summary:")
+        print(f"  chunk_size={getattr(cfg, 'chunk_size', None)} shift_size={getattr(cfg, 'shift_size', None)}")
+        print(f"  cache_drop_size={getattr(cfg, 'cache_drop_size', None)} valid_out_len={getattr(cfg, 'valid_out_len', None)}")
+        print(f"  pre_encode_cache_size={getattr(cfg, 'pre_encode_cache_size', None)} drop_extra_pre_encoded={getattr(cfg, 'drop_extra_pre_encoded', None)}")
+        print(f"  last_channel_cache_size={getattr(cfg, 'last_channel_cache_size', None)}")
 
-    cache_state = _call_get_initial_cache_state(encoder, batch_size=1)
-    cache_state = tuple(
-        t.to(device) if torch.is_tensor(t) else t for t in cache_state
-    )
-    _describe_value("initial_cache_state", cache_state)
+    def _scalar_int(t):
+        if not torch.is_tensor(t) or t.numel() != 1:
+            return None
+        return int(t.detach().item())
 
-    with torch.no_grad():
-        for idx in range(args.num_chunks):
-            print(f"\n=== Chunk {idx} ===")
-            step_out = _call_cache_aware_stream_step(encoder, x, x_len, cache_state)
-            _describe_value("cache_aware_stream_step out", step_out)
+    def _log_chunk_summary(tag, step_out, post_out, chunk_len):
+        cfg = getattr(encoder, "streaming_cfg", None)
+        cache_drop_size = getattr(cfg, "cache_drop_size", None) if cfg is not None else None
+        valid_out_len = getattr(cfg, "valid_out_len", None) if cfg is not None else None
+        shift_size = getattr(cfg, "shift_size", None) if cfg is not None else None
+        pre_encode_cache_size = getattr(cfg, "pre_encode_cache_size", None) if cfg is not None else None
+        drop_extra_pre_encoded = getattr(cfg, "drop_extra_pre_encoded", None) if cfg is not None else None
 
-            post_out = _call_streaming_post_process(encoder, step_out)
-            if post_out is not step_out:
-                _describe_value("streaming_post_process out", post_out)
+        enc_len_pre = _scalar_int(step_out[1]) if isinstance(step_out, (tuple, list)) and len(step_out) > 1 else None
+        cache_len_pre = _scalar_int(step_out[4]) if isinstance(step_out, (tuple, list)) and len(step_out) > 4 else None
+        enc_len_post = _scalar_int(post_out[1]) if isinstance(post_out, (tuple, list)) and len(post_out) > 1 else None
+        cache_len_post = _scalar_int(post_out[4]) if isinstance(post_out, (tuple, list)) and len(post_out) > 4 else None
 
-            cache_state = _extract_cache_state(post_out)
-            _describe_value("next_cache_state", cache_state)
-            _assert_cache_len_ok(cache_state[2])
+        def _diff(a, b):
+            if a is None or b is None:
+                return None
+            return a - b
+
+        diff_drop = _diff(enc_len_pre, cache_drop_size)
+        diff_drop_valid = _diff(enc_len_pre, (cache_drop_size + valid_out_len) if cache_drop_size is not None and valid_out_len is not None else None)
+        print(f"{tag} summary:")
+        print(f"  input_len={chunk_len} enc_len_pre={enc_len_pre} enc_len_post={enc_len_post}")
+        print(f"  cache_len_pre={cache_len_pre} cache_len_post={cache_len_post}")
+        print(f"  cache_drop_size={cache_drop_size} valid_out_len={valid_out_len} shift_size={shift_size}")
+        print(f"  pre_encode_cache_size={pre_encode_cache_size} drop_extra_pre_encoded={drop_extra_pre_encoded}")
+        print(f"  enc_len_pre - cache_drop_size={diff_drop} enc_len_pre - (cache_drop+valid)={diff_drop_valid}")
+
+    def _run_sequence(chunk_len, num_chunks):
+        x = torch.randn(1, feature_dim, chunk_len, device=device)
+        x_len = torch.tensor([chunk_len], dtype=torch.int64, device=device)
+        cache_state = _call_get_initial_cache_state(encoder, batch_size=1)
+        cache_state = tuple(
+            t.to(device) if torch.is_tensor(t) else t for t in cache_state
+        )
+        _describe_value("initial_cache_state", cache_state)
+
+        with torch.no_grad():
+            for idx in range(num_chunks):
+                print(f"\n=== Chunk {idx} ===")
+                step_out = _call_cache_aware_stream_step(encoder, x, x_len, cache_state)
+                _describe_value("cache_aware_stream_step out", step_out)
+
+                post_out = _call_streaming_post_process(encoder, step_out)
+                if post_out is not step_out:
+                    _describe_value("streaming_post_process out", post_out)
+
+                _log_chunk_summary("chunk", step_out, post_out, chunk_len)
+                cache_state = _extract_cache_state(post_out)
+                _describe_value("next_cache_state", cache_state)
+                if not args.no_assert_cache_len:
+                    _assert_cache_len_ok(cache_state[2])
+
+    _print_streaming_cfg_summary()
+
+    if args.sweep_chunk_lens:
+        sweep = _parse_int_list(args.sweep_chunk_lens)
+        print(f"Running chunk-length sweep: {sweep}")
+        for length in sweep:
+            print(f"\n=== Sweep chunk_len={length} ===")
+            try:
+                _run_sequence(length, num_chunks=1)
+            except Exception as exc:
+                print(f"Sweep chunk_len={length} failed: {exc}")
+        return
+
+    _run_sequence(default_chunk_len, num_chunks=args.num_chunks)
 
     print("\n✅ Encoder cache-aware streaming loop completed without shape errors.")
 
