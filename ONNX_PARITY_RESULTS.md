@@ -251,7 +251,7 @@ From `contracts/encoder_streaming.contract.json`:
 
 ## Conclusion
 
-**Overall Verdict: ✅ PROCEED WITH TRT INTEGRATION**
+**Overall Verdict: ✅ CLEARED FOR TRT INTEGRATION**
 
 The ONNX export successfully validates:
 1. ✅ Correct `valid_out_len=1` streaming semantics
@@ -259,10 +259,24 @@ The ONNX export successfully validates:
 3. ✅ Perfect cache_last_channel handling
 4. ✅ Encoder output quality within acceptable FP32 bounds
 
-The `cache_last_time_out` mismatch is a **known issue** that does not block integration:
-- Does not impact `encoder_output` quality
-- Does not cause instability in 50-chunk closed-loop test
-- Likely an ONNX export numerical precision artifact
+### Cache Reset Contract (KEY FINDING)
+
+**Diagnostic testing revealed:**
+- `cache_last_channel_len == 0` for ALL chunks (input and output)
+- Streaming operates in **"chunk-isolated" mode** with per-chunk cache reset
+- Cache is used intra-chunk but NOT carried across chunk boundaries
+
+**Impact on cache_last_time_out mismatch:**
+- Errors (0.01-0.1) are real but **non-propagating**
+- Cache outputs fed back but masked/ignored due to cache_len=0
+- Explains why closed-loop remains stable despite cache sensitivity
+
+**TRT Integration Requirements:**
+- Add assertion: `cache_last_channel_len_out == 0` at every chunk
+- Maintain fixed cache shapes for stability (even though values unused)
+- Validate 300-chunk closed-loop stability before deployment
+
+See [TRT_INTEGRATION_CLEARANCE.md](TRT_INTEGRATION_CLEARANCE.md) for complete integration guidance.
 
 **Next milestone:** TensorRT engine build + parity test using same JSONL reference and similar harness.
 
