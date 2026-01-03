@@ -56,6 +56,45 @@ def _select_streaming_chunk_len(streaming_cfg, fallback: int):
         return int(max(chunk_size))
     return int(chunk_size)
 
+def _infer_chunk_shift_steps(encoder, streaming_cfg):
+    if streaming_cfg is None:
+        return None, None
+    chunk = getattr(streaming_cfg, "chunk_size", None)
+    shift = getattr(streaming_cfg, "shift_size", None)
+    cache_drop = getattr(streaming_cfg, "cache_drop_size", None)
+    subsampling = getattr(encoder, "subsampling_factor", None) or 1
+
+    if hasattr(encoder, "pre_encode") and hasattr(encoder.pre_encode, "get_sampling_frames"):
+        sampling_frames = encoder.pre_encode.get_sampling_frames()
+    else:
+        sampling_frames = 0
+
+    chunk_max = max(chunk) if isinstance(chunk, (list, tuple)) else chunk
+    sampling_max = max(sampling_frames) if isinstance(sampling_frames, (list, tuple)) else sampling_frames
+    if chunk_max is None or sampling_max is None or subsampling <= 0:
+        return None, None
+
+    try:
+        lookahead_steps = int(round((chunk_max - sampling_max) / subsampling))
+        chunk_steps = lookahead_steps + 1
+    except Exception:
+        return None, None
+
+    shift_steps = None
+    if cache_drop is not None:
+        shift_steps = int(chunk_steps - cache_drop)
+        if shift_steps < 1:
+            shift_steps = 1
+    elif shift is not None:
+        shift_max = max(shift) if isinstance(shift, (list, tuple)) else shift
+        if shift_max is not None and sampling_max is not None and subsampling > 0:
+            try:
+                lookahead_shift = int(round((shift_max - sampling_max) / subsampling))
+                shift_steps = lookahead_shift + 1
+            except Exception:
+                shift_steps = None
+    return chunk_steps, shift_steps
+
 def _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size):
     cfg = getattr(encoder, "streaming_cfg", None)
     if cfg is None:
@@ -94,6 +133,32 @@ def _call_setup_streaming_params(encoder):
         return
     if "cfg" in names:
         setup_fn(cfg=encoder.streaming_cfg)
+        return
+    if "chunk_size" in names or "shift_size" in names:
+        cfg = getattr(encoder, "streaming_cfg", None)
+        kwargs = {}
+        inferred_chunk, inferred_shift = _infer_chunk_shift_steps(encoder, cfg)
+        if "chunk_size" in names:
+            value = inferred_chunk
+            if value is None:
+                value = getattr(cfg, "chunk_size", None) if cfg is not None else None
+                if isinstance(value, (list, tuple)):
+                    value = int(max(value)) if value else None
+            kwargs["chunk_size"] = value
+        if "shift_size" in names:
+            value = inferred_shift
+            if value is None:
+                value = getattr(cfg, "shift_size", None) if cfg is not None else None
+                if isinstance(value, (list, tuple)):
+                    value = int(max(value)) if value else None
+            kwargs["shift_size"] = value
+        if "left_chunks" in names:
+            kwargs["left_chunks"] = getattr(cfg, "left_chunks", None) if cfg is not None else None
+        if "att_context_size" in names:
+            kwargs["att_context_size"] = getattr(cfg, "att_context_size", None) if cfg is not None else None
+        if "max_context" in names:
+            kwargs["max_context"] = getattr(cfg, "max_context", None) if cfg is not None else None
+        setup_fn(**kwargs)
         return
     raise RuntimeError(f"Unsupported setup_streaming_params signature: {sig}")
 
@@ -497,6 +562,7 @@ def export_encoder_streaming(
     shift_size=None,
     dummy_len=0,
     use_post_process=True,
+    skip_setup=False,
 ):
     stage = "Exporting Encoder (Streaming Cache-Aware)"
     logger.info(f"Starting: {stage}")
@@ -509,7 +575,12 @@ def export_encoder_streaming(
         logger.warning("encoder.export_cache_support not found; continuing without it")
 
     cfg = _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size)
-    _call_setup_streaming_params(encoder)
+    if not skip_setup:
+        _call_setup_streaming_params(encoder)
+        # setup_streaming_params may reset streaming_cfg; reapply overrides if needed.
+        cfg = _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size)
+    else:
+        logger.info("Skipping encoder.setup_streaming_params per CLI flag")
 
     n_mels = model.cfg.preprocessor.get('features', 128)
     time_steps = dummy_len or _select_streaming_chunk_len(cfg, fallback=64)
@@ -732,6 +803,7 @@ def main():
     parser.add_argument("--streaming-shift-size", type=str, default="", help="Override encoder.streaming_cfg.shift_size (comma-separated)")
     parser.add_argument("--streaming-dummy-len", type=int, default=0, help="Override dummy chunk length for streaming export")
     parser.add_argument("--streaming-no-postprocess", action="store_true", help="Skip streaming_post_process in streaming encoder export")
+    parser.add_argument("--streaming-skip-setup", action="store_true", help="Skip encoder.setup_streaming_params in streaming export")
     args = parser.parse_args()
 
     # Start Heartbeat
@@ -834,6 +906,7 @@ def main():
                         shift_size=shift_size,
                         dummy_len=args.streaming_dummy_len,
                         use_post_process=not args.streaming_no_postprocess,
+                        skip_setup=args.streaming_skip_setup,
                     )
                     exported.append(os.path.join(args.out, "encoder_streaming.onnx"))
                 elif comp == 'predictor':

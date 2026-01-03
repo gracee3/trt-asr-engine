@@ -23,3 +23,5 @@ cpp/build_mock/
 apps/trt_runtime_smoke/build_real/
 
 .cursor/debug.log
+out/
+
