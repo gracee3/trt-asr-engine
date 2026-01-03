@@ -1133,6 +1133,11 @@ struct ParakeetSession {
   // Streaming decode state: last token id fed into predictor (carried across push_features calls).
   int32_t y_id = kBlankId;
 
+  // Streaming partial hypothesis state (accumulated across push_features calls).
+  std::vector<int> accumulated_tokens;
+  std::chrono::steady_clock::time_point last_partial_emit;
+  int last_partial_token_count = 0;
+
   DebugContext debug;
 
   // Predictor state buffers (device pointers).
@@ -1164,7 +1169,8 @@ struct ParakeetSession {
   std::vector<float> host_joint_logits_f32;
 
   ParakeetSession(const ParakeetConfig* config)
-      : model_dir(config->model_dir), device_id(config->device_id), use_fp16(config->use_fp16) {
+      : model_dir(config->model_dir), device_id(config->device_id), use_fp16(config->use_fp16),
+        last_partial_emit(std::chrono::steady_clock::now() - std::chrono::milliseconds(1000)) {
     host_joint_logits_fp16.resize(kJointVocabSize);
     host_joint_logits_f32.resize(kJointVocabSize);
   }
@@ -1286,6 +1292,11 @@ void parakeet_reset_utterance(ParakeetSession* session) {
   // Reset predictor state to zeros.
   debug_memset_async(session->d_h, 0, kPredLayers * 1 * kPredDim * 2, session->stream, "reset:h", &session->debug);
   debug_memset_async(session->d_c, 0, kPredLayers * 1 * kPredDim * 2, session->stream, "reset:c", &session->debug);
+
+  // Reset accumulated tokens for streaming partial emission.
+  session->accumulated_tokens.clear();
+  session->last_partial_token_count = 0;
+  session->last_partial_emit = std::chrono::steady_clock::now() - std::chrono::milliseconds(1000);
 
   // Prime predictor with NeMo-style prompt tokens once per utterance.
   // This seeds h/c and initializes y_id so decoding can continue across push_features calls.
@@ -1456,17 +1467,17 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     // `session->y_id` is tracked as "last emitted token id" for visibility/logging.
     int32_t y_id = session->y_id;
     if (y_id < 0) y_id = kBlankId;
-    std::vector<int> emitted;
-    emitted.reserve(static_cast<size_t>(T_enc));
+    // Use session-level accumulated_tokens for partial emission across chunks.
+    // Local emitted is still used for the final event of this chunk.
+    std::vector<int>& emitted = session->accumulated_tokens;
+    const size_t emitted_start = emitted.size();  // Track tokens emitted before this chunk
 
     nvinfer1::DataType joint_enc_dt = session->joint.engine->getTensorDataType("encoder_output");
     std::vector<float> host_joint_enc_slice_f32(static_cast<size_t>(kEncDim) * static_cast<size_t>(kTrtChunkT));
     nvinfer1::DataType joint_out_dt = session->joint.engine->getTensorDataType("joint_output");
     std::vector<float> host_joint_logits_f32(static_cast<size_t>(kJointVocabSize));
 
-    auto last_partial_emit = std::chrono::steady_clock::now() - std::chrono::milliseconds(1000);
     const auto partial_interval = std::chrono::milliseconds(100);
-    int last_emitted_count = 0;
 
     int time_idx = 0;
     int dbg_steps = 0;
@@ -1664,22 +1675,6 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         emitted_blank = true;
         time_idx += advance;
 
-        // Emit partial hypothesis at most every ~100ms (best-effort).
-        if (std::chrono::steady_clock::now() - last_partial_emit >= partial_interval) {
-          if (static_cast<int>(emitted.size()) != last_emitted_count) {
-            last_emitted_count = static_cast<int>(emitted.size());
-            ParakeetEventInternal pev{};
-            pev.type = PARAKEET_EVENT_PARTIAL_TEXT;
-            pev.segment_id = 0;
-            pev.text = session->tokenizer->decode(emitted);
-            {
-              std::lock_guard<std::mutex> lock(session->event_mutex);
-              session->event_queue.push(std::move(pev));
-            }
-          }
-          last_partial_emit = std::chrono::steady_clock::now();
-        }
-
         break;  // move to next encoder time window
       }
 
@@ -1697,15 +1692,35 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   << "\n";
         time_idx += 1;
       }
+
+      // Emit partial hypothesis at most every ~100ms (wall-clock).
+      // This uses session-level state to track accumulated tokens across push_features calls.
+      if (std::chrono::steady_clock::now() - session->last_partial_emit >= partial_interval) {
+        if (static_cast<int>(emitted.size()) != session->last_partial_token_count) {
+          session->last_partial_token_count = static_cast<int>(emitted.size());
+          ParakeetEventInternal pev{};
+          pev.type = PARAKEET_EVENT_PARTIAL_TEXT;
+          pev.segment_id = 0;
+          pev.text = session->tokenizer->decode(emitted);
+          {
+            std::lock_guard<std::mutex> lock(session->event_mutex);
+            session->event_queue.push(std::move(pev));
+          }
+        }
+        session->last_partial_emit = std::chrono::steady_clock::now();
+      }
     }
 
-    // Emit final transcript event.
+    // Emit final transcript event for this chunk.
+    // Only emit the tokens added during this chunk (delta from emitted_start).
     {
       std::lock_guard<std::mutex> lock(session->event_mutex);
       ParakeetEventInternal ev{};
       ev.type = PARAKEET_EVENT_FINAL_TEXT;
       ev.segment_id = 0;
-      ev.text = session->tokenizer->decode(emitted);
+      // Only decode the tokens emitted in this chunk (not the full accumulated buffer).
+      std::vector<int> chunk_tokens(emitted.begin() + static_cast<std::ptrdiff_t>(emitted_start), emitted.end());
+      ev.text = session->tokenizer->decode(chunk_tokens);
       session->event_queue.push(std::move(ev));
     }
 
@@ -1715,6 +1730,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         "cpp/src/parakeet_trt.cpp:parakeet_push_features:final",
         "Final event queued",
         std::string("{\"emitted_ct\":") + std::to_string(emitted.size()) +
+            ",\"chunk_tokens\":" + std::to_string(emitted.size() - emitted_start) +
             ",\"decoded_len\":" + std::to_string(session->event_queue.back().text.size()) + "}");
     // #endregion
 
