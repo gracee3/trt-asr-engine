@@ -25,4 +25,13 @@ apps/trt_runtime_smoke/build_real/
 .cursor/debug.log
 out/
 
-pytorch_reference_50.jsonl
+# PyTorch reference data (large JSONL files with base64-encoded tensors)
+pytorch_reference_*.jsonl
+
+# Parity test results
+parity_*chunks_*.json
+cache_time_diagnostic.json
+
+# TRT parity results (when generated)
+trt_parity_*.json
+trt_stability_*.png

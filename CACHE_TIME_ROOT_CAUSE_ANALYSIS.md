@@ -8,16 +8,21 @@
 
 ## Executive Summary
 
-**Diagnostic Verdict:** 🔴 **REQUIRES INVESTIGATION BEFORE TRT INTEGRATION**
+**Diagnostic Verdict:** ✅ **RESOLVED — CLEARED FOR TRT INTEGRATION**
 
 Three-part diagnostic test reveals:
 1. ✅ Errors uniformly distributed across K dimension → NOT a padding-side mismatch
 2. ✅ Errors persist in significant (non-zero) regions → NOT padding junk
 3. 🔴 **cache_last_time IS semantically active** → encoder_output delta up to **0.14** when perturbed
 
-**Implication:** The 0.01-0.1 cache_last_time errors are NOT benign and SHOULD propagate in closed-loop mode, yet empirical parity tests show encoder_output errors remain bounded (< 3e-4) and stable over 50 chunks.
+**Critical Finding:** `cache_last_channel_len == 0` for ALL chunks (input and output)
 
-**Hypothesis:** There is a **compensating mechanism** (likely in `streaming_post_process` or cache normalization) that prevents cache errors from accumulating, but this should be validated explicitly before TRT integration.
+**Resolution:** The 0.01-0.1 cache_last_time errors are real but **non-propagating** due to explicit cache isolation contract:
+- Model operates in **"chunk-isolated" mode** (no inter-chunk cache carryover)
+- Cache used intra-chunk but masked/ignored across chunk boundaries via `cache_len=0`
+- Empirical stability (errors < 3e-4, no accumulation) explained by cache reset mechanism
+
+**TRT Integration Status:** **CLEARED** provided runtime enforces `cache_last_channel_len_out == 0` assertion
 
 ---
 
@@ -216,19 +221,20 @@ If output is `All zero: True`, **you have your answer** and can document the str
 
 ---
 
-## Updated GO/NO-GO Decision
+## ✅ Cache Length Hypothesis — VALIDATED
 
-**HOLD TRT integration** until cache length hypothesis is validated.
+**Validation Result:**
+```
+Input cache lengths:  {0}
+Output cache lengths: {0}
+All inputs zero: True
+All outputs zero: True
+```
 
-**Revised criteria for GO:**
-- ✅ Confirm `cache_last_channel_len == 0` for all chunks (or identify compensating mechanism)
-- ✅ Document runtime contract explicitly (cache reset behavior)
-- ✅ Add assertion in TRT runtime wrapper
-
-**If cache_len is NOT always zero:**
-- Investigate why sensitivity test shows high impact but parity shows low error
-- Identify and validate compensating mechanism
-- Ensure TRT replicates same behavior
+**Conclusion:** Cache isolation mechanism **CONFIRMED**
+- All 50 chunks operate with `cache_last_channel_len == 0`
+- Chunk-isolated mode is the **actual streaming contract** for this export
+- TRT integration cleared to proceed with mandatory runtime assertions
 
 ---
 
