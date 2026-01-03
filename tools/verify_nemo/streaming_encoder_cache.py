@@ -2,8 +2,10 @@
 import argparse
 import dataclasses
 import inspect
+import json
 import os
 import sys
+import time
 
 import torch
 import nemo.collections.asr as nemo_asr
@@ -302,6 +304,8 @@ def main():
     parser.add_argument("--use-streaming-cfg-schedule", action="store_true", help="Use streaming_cfg chunk/shift/pre-encode schedule")
     parser.add_argument("--ab-test-chunk", type=int, default=-1, help="Run cache usefulness A/B test at this chunk index")
     parser.add_argument("--skip-setup-streaming-params", action="store_true", help="Skip encoder.setup_streaming_params call")
+    parser.add_argument("--log-every", type=int, default=1, help="Log verbose chunk details every N chunks")
+    parser.add_argument("--jsonl-out", type=str, default="", help="Write per-chunk summary JSONL to this path")
     args = parser.parse_args()
 
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -444,11 +448,25 @@ def main():
     def _ab_test_diff(a, b, label):
         if not torch.is_tensor(a) or not torch.is_tensor(b):
             print(f"{label} diff: <non-tensor>")
-            return
+            return None
         diff = (a.to(torch.float32) - b.to(torch.float32)).abs()
-        print(f"{label} diff: max={diff.max().item():.6f} mean={diff.mean().item():.6f}")
+        max_val = diff.max().item()
+        mean_val = diff.mean().item()
+        print(f"{label} diff: max={max_val:.6f} mean={mean_val:.6f}")
+        return {"max": max_val, "mean": mean_val}
 
-    def _run_sequence(chunk_len, num_chunks):
+    def _shape_list(t):
+        if not torch.is_tensor(t):
+            return None
+        return list(t.shape)
+
+    def _write_jsonl(handle, payload):
+        if handle is None:
+            return
+        handle.write(json.dumps(payload) + "\n")
+        handle.flush()
+
+    def _run_sequence(chunk_len, num_chunks, jsonl_handle):
         cache_state = _call_get_initial_cache_state(encoder, batch_size=1)
         cache_state = tuple(
             t.to(device) if torch.is_tensor(t) else t for t in cache_state
@@ -464,6 +482,7 @@ def main():
 
         with torch.no_grad():
             for idx in range(num_chunks):
+                log_this = args.log_every <= 1 or (idx % args.log_every == 0) or (idx == num_chunks - 1)
                 if schedule:
                     item = schedule[idx]
                     x = feature_buffer[:, :, item["slice_start"] : item["slice_end"]]
@@ -473,21 +492,31 @@ def main():
                     x_len_val = chunk_len
                 x_len = torch.tensor([x_len_val], dtype=torch.int64, device=device)
 
-                print(f"\n=== Chunk {idx} ===")
-                if schedule:
-                    print(
-                        f"schedule: start={item['start']} chunk_size={item['chunk_size']} "
-                        f"shift_size={item['shift_size']} pre_encode={item['pre_encode']} "
-                        f"slice=[{item['slice_start']}, {item['slice_end']})"
-                    )
+                if log_this:
+                    print(f"\n=== Chunk {idx} ===")
+                    if schedule:
+                        print(
+                            f"schedule: start={item['start']} chunk_size={item['chunk_size']} "
+                            f"shift_size={item['shift_size']} pre_encode={item['pre_encode']} "
+                            f"slice=[{item['slice_start']}, {item['slice_end']})"
+                        )
 
+                cache_len_in = _scalar_int(cache_state[2]) if isinstance(cache_state, (tuple, list)) and len(cache_state) > 2 else None
+
+                step_start = time.perf_counter()
                 step_out = _call_cache_aware_stream_step(encoder, x, x_len, cache_state)
-                _describe_value("cache_aware_stream_step out", step_out)
+                step_ms = (time.perf_counter() - step_start) * 1000.0
+                if log_this:
+                    _describe_value("cache_aware_stream_step out", step_out)
 
+                post_start = time.perf_counter()
                 post_out = _call_streaming_post_process(encoder, step_out)
+                post_ms = (time.perf_counter() - post_start) * 1000.0
                 if post_out is not step_out:
-                    _describe_value("streaming_post_process out", post_out)
+                    if log_this:
+                        _describe_value("streaming_post_process out", post_out)
 
+                ab_diff = None
                 if args.ab_test_chunk == idx:
                     reset_cache = _call_get_initial_cache_state(encoder, batch_size=1)
                     reset_cache = tuple(
@@ -497,20 +526,74 @@ def main():
                     post_out_reset = _call_streaming_post_process(encoder, step_out_reset)
                     print("A/B test (threaded vs reset caches):")
                     if isinstance(post_out, (tuple, list)) and isinstance(post_out_reset, (tuple, list)):
-                        _ab_test_diff(post_out[0], post_out_reset[0], "encoder_output")
-                        _ab_test_diff(post_out[2], post_out_reset[2], "cache_last_channel")
-                        _ab_test_diff(post_out[3], post_out_reset[3], "cache_last_time")
-                        _ab_test_diff(post_out[4], post_out_reset[4], "cache_last_channel_len")
+                        ab_diff = {
+                            "encoder_output": _ab_test_diff(post_out[0], post_out_reset[0], "encoder_output"),
+                            "cache_last_channel": _ab_test_diff(post_out[2], post_out_reset[2], "cache_last_channel"),
+                            "cache_last_time": _ab_test_diff(post_out[3], post_out_reset[3], "cache_last_time"),
+                            "cache_last_channel_len": _ab_test_diff(post_out[4], post_out_reset[4], "cache_last_channel_len"),
+                        }
                     else:
                         print("A/B test: unexpected output structure")
 
-                _log_chunk_summary("chunk", step_out, post_out, x_len_val)
+                if log_this:
+                    _log_chunk_summary("chunk", step_out, post_out, x_len_val)
+
+                enc_len_pre = _scalar_int(step_out[1]) if isinstance(step_out, (tuple, list)) and len(step_out) > 1 else None
+                cache_len_pre = _scalar_int(step_out[4]) if isinstance(step_out, (tuple, list)) and len(step_out) > 4 else None
+                enc_len_post = _scalar_int(post_out[1]) if isinstance(post_out, (tuple, list)) and len(post_out) > 1 else None
+                cache_len_post = _scalar_int(post_out[4]) if isinstance(post_out, (tuple, list)) and len(post_out) > 4 else None
+
+                cfg = getattr(encoder, "streaming_cfg", None)
+                record = {
+                    "chunk_idx": idx,
+                    "input_len": x_len_val,
+                    "enc_len_pre": enc_len_pre,
+                    "enc_len_post": enc_len_post,
+                    "cache_len_in": cache_len_in,
+                    "cache_len_pre": cache_len_pre,
+                    "cache_len_out": cache_len_post,
+                    "cache_drop_size": getattr(cfg, "cache_drop_size", None) if cfg is not None else None,
+                    "valid_out_len": getattr(cfg, "valid_out_len", None) if cfg is not None else None,
+                    "shift_size": getattr(cfg, "shift_size", None) if cfg is not None else None,
+                    "pre_encode_cache_size": getattr(cfg, "pre_encode_cache_size", None) if cfg is not None else None,
+                    "drop_extra_pre_encoded": getattr(cfg, "drop_extra_pre_encoded", None) if cfg is not None else None,
+                    "cache_shapes_in": {
+                        "cache_last_channel": _shape_list(cache_state[0]) if isinstance(cache_state, (tuple, list)) else None,
+                        "cache_last_time": _shape_list(cache_state[1]) if isinstance(cache_state, (tuple, list)) else None,
+                        "cache_last_channel_len": _shape_list(cache_state[2]) if isinstance(cache_state, (tuple, list)) else None,
+                    },
+                    "cache_shapes_out": {
+                        "cache_last_channel": _shape_list(post_out[2]) if isinstance(post_out, (tuple, list)) and len(post_out) > 2 else None,
+                        "cache_last_time": _shape_list(post_out[3]) if isinstance(post_out, (tuple, list)) and len(post_out) > 3 else None,
+                        "cache_last_channel_len": _shape_list(post_out[4]) if isinstance(post_out, (tuple, list)) and len(post_out) > 4 else None,
+                    },
+                    "timing_ms": {
+                        "step": step_ms,
+                        "postprocess": post_ms,
+                        "total": step_ms + post_ms,
+                    },
+                    "ab_diff": ab_diff,
+                }
+                if schedule:
+                    record["schedule"] = {
+                        "start": item["start"],
+                        "chunk_size": item["chunk_size"],
+                        "shift_size": item["shift_size"],
+                        "pre_encode": item["pre_encode"],
+                        "slice_start": item["slice_start"],
+                        "slice_end": item["slice_end"],
+                    }
+                _write_jsonl(jsonl_handle, record)
+
                 cache_state = _extract_cache_state(post_out)
-                _describe_value("next_cache_state", cache_state)
+                if log_this:
+                    _describe_value("next_cache_state", cache_state)
                 if not args.no_assert_cache_len:
                     _assert_cache_len_ok(cache_state[2])
 
     _print_streaming_cfg_summary()
+
+    jsonl_handle = open(args.jsonl_out, "w", encoding="utf-8") if args.jsonl_out else None
 
     if args.sweep_chunk_lens:
         sweep = _parse_int_list(args.sweep_chunk_lens)
@@ -518,12 +601,16 @@ def main():
         for length in sweep:
             print(f"\n=== Sweep chunk_len={length} ===")
             try:
-                _run_sequence(length, num_chunks=1)
+                _run_sequence(length, num_chunks=1, jsonl_handle=jsonl_handle)
             except Exception as exc:
                 print(f"Sweep chunk_len={length} failed: {exc}")
+        if jsonl_handle is not None:
+            jsonl_handle.close()
         return
 
-    _run_sequence(default_chunk_len, num_chunks=args.num_chunks)
+    _run_sequence(default_chunk_len, num_chunks=args.num_chunks, jsonl_handle=jsonl_handle)
+    if jsonl_handle is not None:
+        jsonl_handle.close()
 
     print("\n✅ Encoder cache-aware streaming loop completed without shape errors.")
 
