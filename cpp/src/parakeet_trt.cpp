@@ -1455,7 +1455,64 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize");
     }
 
+    // DIAGNOSTIC: Log encoder output statistics per chunk
+    {
+      double enc_sum = 0.0, enc_sumsq = 0.0;
+      float enc_min = 1e9f, enc_max = -1e9f;
+      const size_t enc_total = host_enc_out_f32.size();
+      for (size_t i = 0; i < enc_total; ++i) {
+        const float v = host_enc_out_f32[i];
+        enc_sum += v;
+        enc_sumsq += v * v;
+        if (v < enc_min) enc_min = v;
+        if (v > enc_max) enc_max = v;
+      }
+      const double enc_mean = enc_sum / static_cast<double>(enc_total);
+      const double enc_var = (enc_sumsq / static_cast<double>(enc_total)) - enc_mean * enc_mean;
+      const double enc_std = std::sqrt(std::max(0.0, enc_var));
+      std::cerr << "[enc_diag] feature_idx=" << session->debug.feature_idx
+                << " T_enc=" << T_enc
+                << " mean=" << enc_mean
+                << " std=" << enc_std
+                << " min=" << enc_min
+                << " max=" << enc_max
+                << " y_id_in=" << session->y_id
+                << " accumulated=" << session->accumulated_tokens.size()
+                << "\n";
+    }
 
+    // EXPERIMENTAL FIX: Reset predictor state (h, c) per chunk to prevent blank-favoring state
+    // from carrying over. Re-prime with the prompt tokens to give each chunk a fresh start.
+    {
+      // Reset h, c to zeros
+      const size_t h_bytes = kPredLayers * 1 * kPredDim * 2;  // fp16
+      const size_t c_bytes = kPredLayers * 1 * kPredDim * 2;  // fp16
+      debug_memset_async(session->d_h, 0, h_bytes, session->stream, "chunk_reset:h", &session->debug);
+      debug_memset_async(session->d_c, 0, c_bytes, session->stream, "chunk_reset:c", &session->debug);
+
+      // Prime with start token and language token (same as parakeet_reset_utterance)
+      auto prime_token = [&](int32_t tok) {
+        if (tok < 0) return;
+        const int64_t host_y = static_cast<int64_t>(tok);
+        debug_memcpy_async(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream,
+                           "chunk_prime:y", &session->debug);
+        enqueue_or_throw(session->pred, session->stream, &session->debug);
+        cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(chunk_prime)");
+        const size_t g_bytes = volume(session->pred.ctx->getTensorShape("g")) * dtype_size(session->pred.engine->getTensorDataType("g"));
+        debug_memcpy_async(session->d_h, session->d_h_out, h_bytes, cudaMemcpyDeviceToDevice, session->stream,
+                           "chunk_prime:h_out->h", &session->debug);
+        debug_memcpy_async(session->d_c, session->d_c_out, c_bytes, cudaMemcpyDeviceToDevice, session->stream,
+                           "chunk_prime:c_out->c", &session->debug);
+        debug_memcpy_async(session->d_joint_pred_in, session->d_g, g_bytes, cudaMemcpyDeviceToDevice, session->stream,
+                           "chunk_prime:g->joint_pred", &session->debug);
+        cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(chunk_prime_copy)");
+      };
+      if (session->tok_start >= 0) prime_token(session->tok_start);
+      if (session->tok_lang >= 0) prime_token(session->tok_lang);
+      // Reset y_id to match priming
+      session->y_id = (session->tok_lang >= 0) ? session->tok_lang :
+                      (session->tok_start >= 0) ? session->tok_start : kBlankId;
+    }
 
     // Greedy TDT/RNNT decode loop using joint slices (T=16) due to engine min profile.
     //
@@ -1553,6 +1610,29 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           }
         }
         // No forced substitution: use blank penalty via env var instead.
+
+        // DIAGNOSTIC: Log joint logits for first few timesteps per chunk
+        if (time_idx < 3 && u == 0) {
+          const float blank_logit = session->host_joint_logits_f32[static_cast<size_t>(kBlankId)];
+          // Find best non-blank
+          int best_nonblank = -1;
+          float best_nonblank_v = -1e9f;
+          for (int32_t i = 0; i < kTokenVocabSize; ++i) {
+            if (i == kBlankId) continue;
+            const float v = session->host_joint_logits_f32[static_cast<size_t>(i)];
+            if (v > best_nonblank_v) {
+              best_nonblank_v = v;
+              best_nonblank = i;
+            }
+          }
+          std::cerr << "[joint_diag] feature_idx=" << session->debug.feature_idx
+                    << " time_idx=" << time_idx
+                    << " blank_logit=" << blank_logit
+                    << " best_nonblank=" << best_nonblank
+                    << " best_nonblank_v=" << best_nonblank_v
+                    << " margin=" << (blank_logit - best_nonblank_v)
+                    << "\n";
+        }
 
         bool suppress_punct = false;
         // Suppress leading punctuation-only emission; it can poison y_id and stall decoding on some utterances.
@@ -1709,6 +1789,17 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         }
         session->last_partial_emit = std::chrono::steady_clock::now();
       }
+    }
+
+    // DIAGNOSTIC: Log chunk decode summary
+    {
+      const size_t chunk_tokens_ct = emitted.size() - emitted_start;
+      std::cerr << "[decode_diag] feature_idx=" << session->debug.feature_idx
+                << " T_enc=" << T_enc
+                << " chunk_tokens=" << chunk_tokens_ct
+                << " total_accumulated=" << emitted.size()
+                << " y_id_out=" << y_id
+                << "\n";
     }
 
     // Emit final transcript event for this chunk.
