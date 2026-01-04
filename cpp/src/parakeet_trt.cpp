@@ -608,6 +608,7 @@ static Logger gLogger;
 // #region agent log
 static std::atomic<int> g_dbg_n{0};
 static std::atomic<int> g_empty_text_dump_n{0};
+static std::atomic<int> g_slice_dbg_n{0};
 static bool is_control_token_str(const std::string& tok) {
   if (tok.empty()) return false;
   if (tok == "<blank>" || tok == "<pad>" || tok == "<unk>") return true;
@@ -2115,6 +2116,44 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           } else if (v > second_tok_v) {
             second_tok = i;
             second_tok_v = v;
+          }
+        }
+        if (best_tok == 0) {
+          const int dbg_n = g_slice_dbg_n.fetch_add(1, std::memory_order_relaxed);
+          if (dbg_n < 8) {
+            const int dump_n = 8;
+            std::ostringstream head_vals;
+            std::ostringstream tok_vals;
+            head_vals << "[";
+            tok_vals << "[";
+            for (int i = 0; i < dump_n && i < head_dim; ++i) {
+              if (i) head_vals << ",";
+              head_vals << head_logits[static_cast<size_t>(i)];
+            }
+            for (int i = 0; i < dump_n && i < token_span; ++i) {
+              if (i) tok_vals << ",";
+              tok_vals << head_logits[static_cast<size_t>(tok_offset + i)];
+            }
+            head_vals << "]";
+            tok_vals << "]";
+            float tok_blank = -1.0e9f;
+            if (kBlankId >= 0 && kBlankId < token_span) {
+              tok_blank = head_logits[static_cast<size_t>(tok_offset + kBlankId)];
+            }
+            std::cerr << "[parakeet_trt] slice_dbg utt_seq=" << session->debug.utt_seq
+                      << " audio_chunk_idx=" << session->debug.audio_chunk_idx
+                      << " feature_idx=" << session->debug.feature_idx
+                      << " head_dim=" << head_dim
+                      << " token_span=" << token_span
+                      << " tok_offset=" << tok_offset
+                      << " best_head_idx=" << best_head_idx
+                      << " best_head_v=" << best_head_v
+                      << " best_tok_local=" << best_tok
+                      << " best_tok_v=" << best_tok_v
+                      << " tok_blank_v=" << tok_blank
+                      << " head0=" << head_vals.str()
+                      << " tok0=" << tok_vals.str()
+                      << "\n";
           }
         }
         // No forced substitution: use blank penalty via env var instead.
