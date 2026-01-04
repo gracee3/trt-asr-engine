@@ -607,6 +607,12 @@ static Logger gLogger;
 
 // #region agent log
 static std::atomic<int> g_dbg_n{0};
+static std::atomic<int> g_empty_text_dump_n{0};
+static bool is_control_token_str(const std::string& tok) {
+  if (tok.empty()) return false;
+  if (tok == "<blank>" || tok == "<pad>" || tok == "<unk>") return true;
+  return tok.front() == '<' && tok.back() == '>';
+}
 static std::string json_escape(const std::string& s) {
   std::string out;
   out.reserve(s.size() + 8);
@@ -2241,6 +2247,37 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     if (session->tokenizer) {
       const std::string decoded = session->tokenizer->decode(emitted);
       current_text_len = static_cast<int>(decoded.size());
+    }
+    if (tokens_emitted_this_chunk > 0 && current_text_len == 0) {
+      const int dump_n = g_empty_text_dump_n.fetch_add(1, std::memory_order_relaxed);
+      if (dump_n < 12) {
+        const size_t chunk_count = tokens_emitted_this_chunk;
+        const size_t max_dump = 12;
+        const size_t dump_count = std::min(chunk_count, max_dump);
+        const size_t dump_start = emitted.size() - dump_count;
+        std::string tokens_json = "[";
+        for (size_t i = dump_start; i < emitted.size(); ++i) {
+          const int id = emitted[i];
+          const bool is_small_id = id >= 0 && id < kNumDurations;
+          const bool is_blank = (id == kBlankId);
+          std::string tok = session->tokenizer ? session->tokenizer->token_at(id) : std::string();
+          const bool is_control = is_control_token_str(tok);
+          if (i > dump_start) tokens_json += ",";
+          tokens_json += std::string("{\"id\":") + std::to_string(id) +
+                         ",\"blank\":" + (is_blank ? "true" : "false") +
+                         ",\"small_id\":" + (is_small_id ? "true" : "false") +
+                         ",\"control\":" + (is_control ? "true" : "false") +
+                         ",\"tok\":\"" + json_escape(tok) + "\"}";
+        }
+        tokens_json += "]";
+        std::cerr << "[parakeet_trt] empty_text_tokens utt_seq=" << session->debug.utt_seq
+                  << " audio_chunk_idx=" << session->debug.audio_chunk_idx
+                  << " feature_idx=" << session->debug.feature_idx
+                  << " tokens_emitted_this_chunk=" << tokens_emitted_this_chunk
+                  << " last_best_tok_id=" << last_best_tok
+                  << " dump=" << tokens_json
+                  << "\n";
+      }
     }
     dbglog_ndjson(
         "H22",
