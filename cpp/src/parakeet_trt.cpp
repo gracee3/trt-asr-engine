@@ -1976,6 +1976,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     std::vector<int>& emitted = session->accumulated_tokens;
     const size_t emitted_start = emitted.size();  // Track tokens emitted before this chunk
     bool did_emit_partial_event = false;
+    bool forced_time_advance = false;
     int last_best_tok = -1;
     bool last_best_blank = false;
 
@@ -1985,6 +1986,9 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     std::vector<float> host_joint_logits_f32(static_cast<size_t>(kJointVocabSize));
 
     const auto partial_interval = std::chrono::milliseconds(100);
+    const bool dur_first = get_env_bool("PARAKEET_JOINT_DUR_FIRST", false);
+    const int tok_offset = dur_first ? kNumDurations : 0;
+    const int dur_offset = dur_first ? 0 : kTokenVocabSize;
 
     int time_idx = 0;
     int dbg_steps = 0;
@@ -2042,14 +2046,14 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         // Apply blank penalty (positive penalizes blank, negative boosts blank).
         const float blank_penalty = get_blank_penalty();
         if (blank_penalty != 0.0f && kBlankId >= 0 && kBlankId < kTokenVocabSize) {
-          session->host_joint_logits_f32[static_cast<size_t>(kBlankId)] -= blank_penalty;
+          session->host_joint_logits_f32[static_cast<size_t>(tok_offset + kBlankId)] -= blank_penalty;
         }
         int best_tok = 0;
-        float best_tok_v = session->host_joint_logits_f32[0];
+        float best_tok_v = session->host_joint_logits_f32[static_cast<size_t>(tok_offset)];
         int second_tok = -1;
         float second_tok_v = -1.0e9f;
         for (int32_t i = 1; i < kTokenVocabSize; ++i) {
-          const float v = session->host_joint_logits_f32[static_cast<size_t>(i)];
+          const float v = session->host_joint_logits_f32[static_cast<size_t>(tok_offset + i)];
           if (v > best_tok_v) {
             second_tok = best_tok;
             second_tok_v = best_tok_v;
@@ -2067,7 +2071,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         if (emitted.empty() && session->tokenizer && session->tokenizer->is_punct_only(best_tok)) {
           suppress_punct = true;
           best_tok = kBlankId;
-          best_tok_v = session->host_joint_logits_f32[static_cast<size_t>(kBlankId)];
+          best_tok_v = session->host_joint_logits_f32[static_cast<size_t>(tok_offset + kBlankId)];
         }
         last_best_tok = best_tok;
         last_best_blank = (best_tok == kBlankId);
@@ -2079,7 +2083,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           float top_vals[k];
           for (int i = 0; i < k; ++i) top_vals[i] = -1.0e9f;
           for (int32_t i = 0; i < kTokenVocabSize; ++i) {
-            const float v = session->host_joint_logits_f32[static_cast<size_t>(i)];
+            const float v = session->host_joint_logits_f32[static_cast<size_t>(tok_offset + i)];
             int insert = -1;
             for (int j = 0; j < k; ++j) {
               if (v > top_vals[j]) {
@@ -2109,15 +2113,16 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
               "Top-k logits (pre-decode)",
               std::string("{\"time_idx\":") + std::to_string(time_idx) +
                   ",\"t_enc\":" + std::to_string(T_enc) +
-                  ",\"blank_logit\":" + std::to_string(session->host_joint_logits_f32[static_cast<size_t>(kBlankId)]) +
+                  ",\"blank_logit\":" +
+                  std::to_string(session->host_joint_logits_f32[static_cast<size_t>(tok_offset + kBlankId)]) +
                   ",\"topk\":" + topk + "}");
         }
 
         // Duration argmax over tail [kTokenVocabSize..kJointVocabSize)
         int best_dur_idx = 0;
-        float best_dur_v = session->host_joint_logits_f32[static_cast<size_t>(kTokenVocabSize)];
+        float best_dur_v = session->host_joint_logits_f32[static_cast<size_t>(dur_offset)];
         for (int32_t i = 1; i < kNumDurations; ++i) {
-          const float v = session->host_joint_logits_f32[static_cast<size_t>(kTokenVocabSize + i)];
+          const float v = session->host_joint_logits_f32[static_cast<size_t>(dur_offset + i)];
           if (v > best_dur_v) {
             best_dur_v = v;
             best_dur_idx = i;
@@ -2141,7 +2146,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   ",\"y_id\":" + std::to_string(y_id) +
                   ",\"best_tok\":" + std::to_string(best_tok) +
                   ",\"best_tok_v\":" + std::to_string(best_tok_v) +
-                  ",\"blank_logit\":" + std::to_string(session->host_joint_logits_f32[static_cast<size_t>(kBlankId)]) +
+                  ",\"blank_logit\":" +
+                  std::to_string(session->host_joint_logits_f32[static_cast<size_t>(tok_offset + kBlankId)]) +
                   ",\"second_tok\":" + std::to_string(second_tok) +
                   ",\"second_tok_v\":" + std::to_string(second_tok_v) +
                   ",\"is_blank\":" + std::string(best_tok == kBlankId ? "true" : "false") +
@@ -2200,6 +2206,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   << " audio_chunk_idx=" << session->debug.audio_chunk_idx
                   << " feature_idx=" << session->debug.feature_idx
                   << "\n";
+        forced_time_advance = true;
         time_idx += 1;
       }
 
@@ -2248,7 +2255,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       const std::string decoded = session->tokenizer->decode(emitted);
       current_text_len = static_cast<int>(decoded.size());
     }
-    if (tokens_emitted_this_chunk > 0 && current_text_len == 0) {
+    if ((tokens_emitted_this_chunk > 0 || forced_time_advance) && current_text_len == 0) {
       const int dump_n = g_empty_text_dump_n.fetch_add(1, std::memory_order_relaxed);
       if (dump_n < 12) {
         const size_t chunk_count = tokens_emitted_this_chunk;
@@ -2274,6 +2281,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   << " audio_chunk_idx=" << session->debug.audio_chunk_idx
                   << " feature_idx=" << session->debug.feature_idx
                   << " tokens_emitted_this_chunk=" << tokens_emitted_this_chunk
+                  << " forced_time_advance=" << (forced_time_advance ? "true" : "false")
                   << " last_best_tok_id=" << last_best_tok
                   << " dump=" << tokens_json
                   << "\n";
@@ -2294,28 +2302,31 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
             ",\"did_emit_partial_event\":" + std::string(did_emit_partial_event ? "true" : "false") +
             "}");
 
-    // Emit final transcript event for this chunk.
-    // Only emit the tokens added during this chunk (delta from emitted_start).
-    {
-      std::lock_guard<std::mutex> lock(session->event_mutex);
-      ParakeetEventInternal ev{};
-      ev.type = PARAKEET_EVENT_FINAL_TEXT;
-      ev.segment_id = 0;
-      // Only decode the tokens emitted in this chunk (not the full accumulated buffer).
-      std::vector<int> chunk_tokens(emitted.begin() + static_cast<std::ptrdiff_t>(emitted_start), emitted.end());
-      ev.text = session->tokenizer->decode(chunk_tokens);
-      session->event_queue.push(std::move(ev));
-    }
+    const bool emit_final_each_chunk = get_env_bool("PARAKEET_EMIT_FINAL_EACH_CHUNK", !session->enc_streaming);
+    if (emit_final_each_chunk) {
+      // Emit final transcript event for this chunk.
+      // Only emit the tokens added during this chunk (delta from emitted_start).
+      {
+        std::lock_guard<std::mutex> lock(session->event_mutex);
+        ParakeetEventInternal ev{};
+        ev.type = PARAKEET_EVENT_FINAL_TEXT;
+        ev.segment_id = 0;
+        // Only decode the tokens emitted in this chunk (not the full accumulated buffer).
+        std::vector<int> chunk_tokens(emitted.begin() + static_cast<std::ptrdiff_t>(emitted_start), emitted.end());
+        ev.text = session->tokenizer->decode(chunk_tokens);
+        session->event_queue.push(std::move(ev));
+      }
 
-    // #region agent log
-    dbglog_ndjson(
-        "H8",
-        "cpp/src/parakeet_trt.cpp:parakeet_push_features:final",
-        "Final event queued",
-        std::string("{\"emitted_ct\":") + std::to_string(emitted.size()) +
-            ",\"chunk_tokens\":" + std::to_string(emitted.size() - emitted_start) +
-            ",\"decoded_len\":" + std::to_string(session->event_queue.back().text.size()) + "}");
-    // #endregion
+      // #region agent log
+      dbglog_ndjson(
+          "H8",
+          "cpp/src/parakeet_trt.cpp:parakeet_push_features:final",
+          "Final event queued",
+          std::string("{\"emitted_ct\":") + std::to_string(emitted.size()) +
+              ",\"chunk_tokens\":" + std::to_string(emitted.size() - emitted_start) +
+              ",\"decoded_len\":" + std::to_string(session->event_queue.back().text.size()) + "}");
+      // #endregion
+    }
 
     // Persist streaming predictor token id for the next chunk.
     //
