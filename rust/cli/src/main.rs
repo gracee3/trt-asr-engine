@@ -169,6 +169,17 @@ fn dump_features_to_file(features_bct: &[f32], path: &PathBuf) -> anyhow::Result
     Ok(())
 }
 
+fn slice_bct_frames(features_bct: &[f32], n_mels: usize, total_frames: usize, start: usize, frames: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; n_mels * frames];
+    for m in 0..n_mels {
+        let src_offset = m * total_frames + start;
+        let dst_offset = m * frames;
+        out[dst_offset..dst_offset + frames]
+            .copy_from_slice(&features_bct[src_offset..src_offset + frames]);
+    }
+    out
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let start_time = std::time::Instant::now();
@@ -267,14 +278,41 @@ fn main() -> anyhow::Result<()> {
         )?;
 
         println!("Starting transcription (feature replay)...");
-        session.push_features(&features_bct, num_frames)?;
+        let max_chunk_frames = 256usize;
+        if num_frames > max_chunk_frames && args.verbose {
+            eprintln!("[replay] Chunking features: {} frames per push", max_chunk_frames);
+        }
 
-        while let Some(event) = session.poll_event() {
-            match event {
-                TranscriptionEvent::FinalText { text, .. } => println!("Transcript: {}", text),
-                TranscriptionEvent::PartialText { text, .. } if args.verbose => eprintln!("[replay] Partial: {}", text),
-                TranscriptionEvent::Error { message } => eprintln!("Error: {}", message),
-                _ => {}
+        if num_frames <= max_chunk_frames {
+            session.push_features(&features_bct, num_frames)?;
+            while let Some(event) = session.poll_event() {
+                match event {
+                    TranscriptionEvent::FinalText { text, .. } => println!("Transcript: {}", text),
+                    TranscriptionEvent::PartialText { text, .. } if args.verbose => eprintln!("[replay] Partial: {}", text),
+                    TranscriptionEvent::Error { message } => eprintln!("Error: {}", message),
+                    _ => {}
+                }
+            }
+        } else {
+            let mut start = 0usize;
+            let mut chunk_idx = 0usize;
+            while start < num_frames {
+                let frames = std::cmp::min(max_chunk_frames, num_frames - start);
+                let chunk_bct = slice_bct_frames(&features_bct, n_mels, num_frames, start, frames);
+                if args.verbose {
+                    eprintln!("[replay] feature_chunk={} start={} frames={}", chunk_idx, start, frames);
+                }
+                session.push_features(&chunk_bct, frames)?;
+                while let Some(event) = session.poll_event() {
+                    match event {
+                        TranscriptionEvent::FinalText { text, .. } => println!("Transcript: {}", text),
+                        TranscriptionEvent::PartialText { text, .. } if args.verbose => eprintln!("[replay] Partial: {}", text),
+                        TranscriptionEvent::Error { message } => eprintln!("Error: {}", message),
+                        _ => {}
+                    }
+                }
+                start += frames;
+                chunk_idx += 1;
             }
         }
 

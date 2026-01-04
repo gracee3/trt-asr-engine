@@ -48,6 +48,8 @@ The debugging infrastructure provides:
 | `PARAKEET_DEBUG_SYNC_MEMCPY=1` | Memory copy timing |
 | `PARAKEET_SLOW_MEMCPY_MS=50` | Threshold for slow memcpy warnings |
 | `PARAKEET_BLANK_PENALTY=N` | Adjust blank token penalty |
+| `PARAKEET_DEBUG_BLANK_SCAN=1` | Log blank-vs-nonblank margin summary per chunk |
+| `PARAKEET_Y0_OVERRIDE=N` | Override initial predictor token (skip prompt priming) |
 | `PARAKEET_DISABLE_CACHE=1` | Disable encoder cache (for comparison) |
 
 ---

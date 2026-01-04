@@ -1746,6 +1746,30 @@ void parakeet_reset_utterance(ParakeetSession* session) {
     cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_prime_copy)");
   };
 
+  bool used_override = false;
+  const char* y0_env = std::getenv("PARAKEET_Y0_OVERRIDE");
+  if (y0_env && *y0_env) {
+    try {
+      const int32_t y0 = static_cast<int32_t>(std::stoi(y0_env));
+      if (y0 < 0) {
+        std::cerr << "[parakeet_trt] WARNING: PARAKEET_Y0_OVERRIDE must be >= 0\n";
+      } else {
+        prime_token(y0);
+        session->y_id = y0;
+        used_override = true;
+        std::cerr << "[parakeet_trt] y0_override=" << y0 << "\n";
+      }
+    } catch (...) {
+      std::cerr << "[parakeet_trt] WARNING: invalid PARAKEET_Y0_OVERRIDE\n";
+    }
+  }
+
+  if (used_override) {
+    std::lock_guard<std::mutex> lock(session->event_mutex);
+    while (!session->event_queue.empty()) session->event_queue.pop();
+    return;
+  }
+
   // Start token first, then language token.
   // NOTE: We intentionally do NOT apply optional constraint tokens here (e.g. <|nopnc|>, <|noitn|>)
   // because in observed runs they bias decoding toward '.' spam ("pe...........") rather than real text.
@@ -2399,6 +2423,14 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     const int dur_offset = dur_first ? 0 : token_logit_size;
     const int dur_bins_used = (dur_bins > 0) ? std::min(dur_bins, kNumDurations) : kNumDurations;
     const int token_span = std::max(0, std::min(token_logit_size, head_dim - tok_offset));
+    const bool blank_scan = get_env_bool("PARAKEET_DEBUG_BLANK_SCAN", false);
+    const bool blank_in_range = (kBlankId >= 0 && kBlankId < token_span);
+    size_t blank_scan_steps = 0;
+    size_t blank_scan_blank_pref = 0;
+    size_t blank_scan_nonblank_pref = 0;
+    double blank_margin_sum = 0.0;
+    double blank_margin_min = std::numeric_limits<double>::infinity();
+    double blank_margin_max = -std::numeric_limits<double>::infinity();
     {
       static std::once_flag once;
       std::call_once(once, [&]() {
@@ -2703,6 +2735,12 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         float best_tok_v = head_logits[static_cast<size_t>(tok_offset)];
         int second_tok = -1;
         float second_tok_v = -1.0e9f;
+        int best_nonblank = -1;
+        float best_nonblank_v = -1.0e9f;
+        if (blank_scan && token_span > 0 && kBlankId != 0) {
+          best_nonblank = 0;
+          best_nonblank_v = best_tok_v;
+        }
         for (int32_t i = 1; i < token_span; ++i) {
           const float v = head_logits[static_cast<size_t>(tok_offset + i)];
           if (v > best_tok_v) {
@@ -2713,6 +2751,10 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           } else if (v > second_tok_v) {
             second_tok = i;
             second_tok_v = v;
+          }
+          if (blank_scan && i != kBlankId && v > best_nonblank_v) {
+            best_nonblank_v = v;
+            best_nonblank = i;
           }
         }
         if (best_tok == 0) {
@@ -2769,6 +2811,22 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         const float blank_logit = (kBlankId >= 0 && kBlankId < token_span)
                                       ? session->host_joint_logits_f32[static_cast<size_t>(tok_offset + kBlankId)]
                                       : -1.0e9f;
+        if (blank_scan && u == 0 && token_span > 0) {
+          const float blank_logit_scan = blank_in_range
+                                             ? session->host_joint_logits_f32[static_cast<size_t>(tok_offset + kBlankId)]
+                                             : -1.0e9f;
+          const float nonblank_logit_scan = (best_nonblank >= 0) ? best_nonblank_v : -1.0e9f;
+          const float margin = blank_logit_scan - nonblank_logit_scan;
+          blank_margin_sum += margin;
+          blank_margin_min = std::min(blank_margin_min, static_cast<double>(margin));
+          blank_margin_max = std::max(blank_margin_max, static_cast<double>(margin));
+          blank_scan_steps++;
+          if (blank_logit_scan >= nonblank_logit_scan) {
+            blank_scan_blank_pref++;
+          } else {
+            blank_scan_nonblank_pref++;
+          }
+        }
         if (get_debug_topk() && u == 0 &&
             (time_idx == 0 || time_idx == (T_enc / 2) || time_idx + 1 == T_enc)) {
           const int k = 5;
@@ -2939,6 +2997,23 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         }
         session->last_partial_emit = std::chrono::steady_clock::now();
       }
+    }
+
+    if (blank_scan && blank_scan_steps > 0) {
+      const double mean_margin = blank_margin_sum / static_cast<double>(blank_scan_steps);
+      std::cerr << "[parakeet_trt] blank_scan"
+                << " steps=" << blank_scan_steps
+                << " blank_pref=" << blank_scan_blank_pref
+                << " nonblank_pref=" << blank_scan_nonblank_pref
+                << " margin_mean=" << mean_margin
+                << " margin_min=" << blank_margin_min
+                << " margin_max=" << blank_margin_max
+                << " blank_in_range=" << (blank_in_range ? "1" : "0")
+                << " token_span=" << token_span
+                << " t_enc=" << T_enc
+                << " chunk_idx=" << session->debug.audio_chunk_idx
+                << " feature_idx=" << session->debug.feature_idx
+                << "\n";
     }
 
     const size_t tokens_emitted_this_chunk = emitted.size() - emitted_start;

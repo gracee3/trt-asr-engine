@@ -160,6 +160,10 @@ AUDIO_TAP_FEATURES=1        # Enable feature tap in trt-asr-engine
 PARAKEET_NAN_GUARD_ALWAYS=1 # Check every chunk for NaN/Inf
 PARAKEET_NAN_GUARD_HALT=1   # Abort on first NaN/Inf
 
+# Decoder debug
+PARAKEET_DEBUG_BLANK_SCAN=1 # Log blank-vs-nonblank margin summary per chunk
+PARAKEET_Y0_OVERRIDE=N      # Override initial predictor token (skip prompt priming)
+
 # Cache debugging
 PARAKEET_CACHE_LEN_OVERRIDE=-1  # Use cache capacity as cache_len
 ```
