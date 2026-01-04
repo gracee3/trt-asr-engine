@@ -1,6 +1,7 @@
 use clap::Parser;
 use features::{FeatureConfig, LogMelExtractor};
 use parakeet_trt::{ParakeetSessionSafe, TranscriptionEvent};
+use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::thread;
@@ -29,17 +30,27 @@ struct Args {
     #[arg(long, help = "Input is raw PCM with this sample rate (requires --raw-pcm)")]
     sample_rate: Option<u32>,
 
-    #[arg(long, help = "Input is pre-computed features [C,T] f32le (bypass feature extraction)")]
+    #[arg(long, help = "Input is pre-computed features (tap raw/json, bypass feature extraction)")]
     features_input: bool,
 
-    #[arg(long, help = "Number of mel bins when using --features-input", default_value_t = 128)]
-    n_mels: usize,
+    #[arg(long, help = "Number of mel bins when using --features-input (overrides JSON sidecar if set)")]
+    n_mels: Option<usize>,
 
     #[arg(long, short, help = "Verbose output (log all events and timing)")]
     verbose: bool,
 
     #[arg(long, help = "Dump computed features to this file (f32le, [C,T])")]
     dump_features: Option<PathBuf>,
+}
+
+#[derive(Debug, Default)]
+struct FeatureMeta {
+    mel_bins: Option<usize>,
+    num_frames: Option<usize>,
+    layout: Option<String>,
+    format: Option<String>,
+    kind: Option<String>,
+    shape: Option<Vec<usize>>,
 }
 
 fn load_raw_pcm(path: &PathBuf) -> anyhow::Result<Vec<f32>> {
@@ -60,8 +71,20 @@ fn load_raw_pcm(path: &PathBuf) -> anyhow::Result<Vec<f32>> {
     Ok(samples)
 }
 
+fn frames_major_to_bins_major(features_tc: &[f32], n_mels: usize, frames: usize) -> Vec<f32> {
+    // Input is [T, C] (frame-major), output is [C, T] (mel-major) to match encoder [B,C,T].
+    let mut out = vec![0.0f32; n_mels * frames];
+    for t in 0..frames {
+        let in_base = t * n_mels;
+        for m in 0..n_mels {
+            out[m * frames + t] = features_tc[in_base + m];
+        }
+    }
+    out
+}
+
 fn load_features_raw(path: &PathBuf, n_mels: usize) -> anyhow::Result<(Vec<f32>, usize)> {
-    // Load pre-computed features in [C, T] layout (mel-major, f32le)
+    // Load pre-computed features (f32le) and infer frames from n_mels.
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut bytes = Vec::new();
@@ -85,6 +108,58 @@ fn load_features_raw(path: &PathBuf, n_mels: usize) -> anyhow::Result<(Vec<f32>,
     Ok((features, num_frames))
 }
 
+fn resolve_feature_paths(input_path: &PathBuf) -> (PathBuf, Option<PathBuf>) {
+    let ext = input_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    if ext.eq_ignore_ascii_case("json") {
+        let mut raw_path = input_path.clone();
+        raw_path.set_extension("raw");
+        return (raw_path, Some(input_path.clone()));
+    }
+
+    let mut json_path = input_path.clone();
+    json_path.set_extension("json");
+    if json_path.exists() {
+        (input_path.clone(), Some(json_path))
+    } else {
+        (input_path.clone(), None)
+    }
+}
+
+fn parse_feature_meta(path: &PathBuf) -> anyhow::Result<FeatureMeta> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let value: Value = serde_json::from_reader(reader)?;
+
+    let mut meta = FeatureMeta::default();
+    meta.kind = value.get("kind").and_then(|v| v.as_str()).map(|s| s.to_string());
+    meta.format = value.get("format").and_then(|v| v.as_str()).map(|s| s.to_string());
+    meta.layout = value.get("layout")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_ascii_lowercase());
+    meta.mel_bins = value.get("mel_bins").and_then(|v| v.as_u64()).map(|v| v as usize);
+    meta.num_frames = value.get("num_frames").and_then(|v| v.as_u64()).map(|v| v as usize);
+    meta.shape = value.get("shape").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect()
+    });
+
+    if (meta.mel_bins.is_none() || meta.num_frames.is_none()) && meta.shape.as_ref().map(|s| s.len()) == Some(2) {
+        let shape = meta.shape.as_ref().unwrap();
+        match meta.layout.as_deref() {
+            Some("bins_major") => {
+                if meta.mel_bins.is_none() { meta.mel_bins = Some(shape[0]); }
+                if meta.num_frames.is_none() { meta.num_frames = Some(shape[1]); }
+            }
+            Some("frames_major") => {
+                if meta.mel_bins.is_none() { meta.mel_bins = Some(shape[1]); }
+                if meta.num_frames.is_none() { meta.num_frames = Some(shape[0]); }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(meta)
+}
+
 fn dump_features_to_file(features_bct: &[f32], path: &PathBuf) -> anyhow::Result<()> {
     use std::io::Write;
     let mut file = File::create(path)?;
@@ -106,10 +181,68 @@ fn main() -> anyhow::Result<()> {
 
     // Handle direct feature input (bypass audio loading and feature extraction)
     if args.features_input {
-        let (features_bct, num_frames) = load_features_raw(&args.input_path, args.n_mels)?;
+        let input_ext = args.input_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        let input_is_json = input_ext.eq_ignore_ascii_case("json");
+        let (feature_path, meta_path) = resolve_feature_paths(&args.input_path);
+        if !feature_path.exists() {
+            anyhow::bail!("Feature raw file not found: {:?}", feature_path);
+        }
+
+        let meta = match meta_path {
+            Some(ref path) if path.exists() => Some(parse_feature_meta(path)?),
+            Some(ref path) if input_is_json => {
+                anyhow::bail!("Feature JSON not found: {:?}", path);
+            }
+            _ => None,
+        };
+
+        let mut n_mels = args.n_mels.unwrap_or(128);
+        let mut layout = "bins_major".to_string();
+        let mut meta_num_frames = None;
+
+        if let Some(ref m) = meta {
+            if let Some(kind) = m.kind.as_deref() {
+                if kind != "mel_features" && args.verbose {
+                    eprintln!("[replay] Warning: JSON kind='{}' (expected mel_features)", kind);
+                }
+            }
+            if let Some(format) = m.format.as_deref() {
+                if format != "f32le" {
+                    anyhow::bail!("Feature JSON format '{}' not supported (expected f32le)", format);
+                }
+            }
+            if args.n_mels.is_none() {
+                if let Some(bins) = m.mel_bins {
+                    n_mels = bins;
+                }
+            }
+            if let Some(l) = m.layout.as_ref() {
+                layout = l.clone();
+            }
+            meta_num_frames = m.num_frames;
+        }
+
+        let (features_raw, num_frames) = load_features_raw(&feature_path, n_mels)?;
+        if let Some(expected_frames) = meta_num_frames {
+            if expected_frames != num_frames && args.verbose {
+                eprintln!("[replay] Warning: JSON num_frames={} but raw implies {}", expected_frames, num_frames);
+            }
+        }
+
+        let features_bct = if layout == "frames_major" {
+            frames_major_to_bins_major(&features_raw, n_mels, num_frames)
+        } else {
+            if layout != "bins_major" && args.verbose {
+                eprintln!("[replay] Warning: Unknown layout '{}', assuming bins_major", layout);
+            }
+            features_raw
+        };
 
         if args.verbose {
-            eprintln!("[replay] Loaded {} frames of {} mel features", num_frames, args.n_mels);
+            if let Some(ref path) = meta_path {
+                eprintln!("[replay] Feature meta: json={:?} layout={} mel_bins={}", path, layout, n_mels);
+            }
+            eprintln!("[replay] Loaded {} frames of {} mel features", num_frames, n_mels);
 
             // Compute stats on features
             let mut nan_ct = 0;
@@ -207,17 +340,6 @@ fn main() -> anyhow::Result<()> {
     let extractor = LogMelExtractor::new(config);
     let n_mels = extractor.n_mels();
 
-    let to_bct = |feat_tc: &[f32], frames: usize| -> Vec<f32> {
-        // Input is [T, C] (frame-major), output is [C, T] (mel-major) to match encoder [B,C,T].
-        let mut out = vec![0.0f32; n_mels * frames];
-        for t in 0..frames {
-            for m in 0..n_mels {
-                out[m * frames + t] = feat_tc[t * n_mels + m];
-            }
-        }
-        out
-    };
-
     // 3. Setup Runtime
     let session = ParakeetSessionSafe::new(
         args.model_dir.to_str().unwrap(),
@@ -242,7 +364,7 @@ fn main() -> anyhow::Result<()> {
             let num_frames = features_tc.len() / n_mels;
 
             if num_frames > 0 {
-                let features_bct = to_bct(&features_tc, num_frames);
+                let features_bct = frames_major_to_bins_major(&features_tc, n_mels, num_frames);
 
                 if args.dump_features.is_some() {
                     all_features_bct.extend_from_slice(&features_bct);
@@ -294,7 +416,7 @@ fn main() -> anyhow::Result<()> {
         // Offline whole file
         let features_tc = extractor.compute(&audio);
         let num_frames = features_tc.len() / n_mels;
-        let features_bct = to_bct(&features_tc, num_frames);
+        let features_bct = frames_major_to_bins_major(&features_tc, n_mels, num_frames);
 
         if args.verbose {
             eprintln!("[replay] Computed {} feature frames", num_frames);

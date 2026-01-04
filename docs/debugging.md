@@ -258,6 +258,12 @@ The Rust CLI (`rust/cli`) supports multiple replay modes:
 ./target/debug/cli tap_features.raw --features-input \
     --model-dir ./models/parakeet-tdt-0.6b-v3 -v
 ```
+If `tap_features.json` is present next to the raw file, the CLI will auto-detect
+mel bins and layout. You can also pass the JSON sidecar directly:
+```bash
+./target/debug/cli tap_features.json --features-input \
+    --model-dir ./models/parakeet-tdt-0.6b-v3 -v
+```
 
 #### Dump features for later replay
 ```bash
@@ -277,8 +283,8 @@ The Rust CLI (`rust/cli`) supports multiple replay modes:
 |--------|-------------|
 | `--raw-pcm` | Input is raw PCM (f32le, 16kHz mono) |
 | `--sample-rate N` | Sample rate for raw PCM (default: 16000) |
-| `--features-input` | Input is pre-computed features [C,T] f32le |
-| `--n-mels N` | Mel bins for features-input (default: 128) |
+| `--features-input` | Input is pre-computed features (auto-detects tap JSON sidecar) |
+| `--n-mels N` | Mel bins for features-input (default: 128, overrides JSON if set) |
 | `--dump-features PATH` | Dump computed features to file |
 | `--stream-sim SECS` | Simulated streaming interval |
 | `-v, --verbose` | Verbose output with timing and stats |

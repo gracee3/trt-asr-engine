@@ -175,8 +175,11 @@ The Rust CLI supports replaying captured audio/features for deterministic reprod
 # Replay raw PCM tap
 ./target/debug/cli tap_post_dsp.raw --raw-pcm --model-dir ./models/... -v
 
-# Replay feature tap (bypass feature extraction)
+# Replay feature tap (bypass feature extraction; auto-detects tap_features.json)
 ./target/debug/cli tap_features.raw --features-input --model-dir ./models/... -v
+
+# Or pass the JSON sidecar directly (infers layout/mel bins)
+./target/debug/cli tap_features.json --features-input --model-dir ./models/... -v
 ```
 
 ## Licensing & attribution
