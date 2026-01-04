@@ -22,7 +22,6 @@ cpp/build_mock/
 
 apps/trt_runtime_smoke/build_real/
 
-.cursor/debug.log
 out/
 artifacts/
 
@@ -37,3 +36,7 @@ cache_time_diagnostic.json
 trt_parity_*.json
 trt_stability_*.png
 .cargo-target-magnolia/
+
+.cursor
+.vscode
+.claude
