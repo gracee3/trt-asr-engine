@@ -704,6 +704,41 @@ static size_t volume(const nvinfer1::Dims& d) {
   return v;
 }
 
+static uint16_t f32_to_fp16(float x);
+static float fp16_to_f32(uint16_t u);
+
+static float max_abs_device(void* ptr,
+                            size_t count,
+                            nvinfer1::DataType dt,
+                            cudaStream_t stream,
+                            const char* label,
+                            const DebugContext* ctx) {
+  if (!ptr || count == 0) return 0.0f;
+  if (dt == nvinfer1::DataType::kHALF) {
+    std::vector<uint16_t> host(count);
+    debug_memcpy_async(host.data(), ptr, host.size() * sizeof(uint16_t), cudaMemcpyDeviceToHost, stream, label, ctx);
+    cuda_check(cudaStreamSynchronize(stream), "cudaStreamSynchronize(max_abs_device:f16)");
+    float max_abs = 0.0f;
+    for (size_t i = 0; i < host.size(); ++i) {
+      const float v = std::fabs(fp16_to_f32(host[i]));
+      if (v > max_abs) max_abs = v;
+    }
+    return max_abs;
+  }
+  if (dt == nvinfer1::DataType::kFLOAT) {
+    std::vector<float> host(count);
+    debug_memcpy_async(host.data(), ptr, host.size() * sizeof(float), cudaMemcpyDeviceToHost, stream, label, ctx);
+    cuda_check(cudaStreamSynchronize(stream), "cudaStreamSynchronize(max_abs_device:f32)");
+    float max_abs = 0.0f;
+    for (size_t i = 0; i < host.size(); ++i) {
+      const float v = std::fabs(host[i]);
+      if (v > max_abs) max_abs = v;
+    }
+    return max_abs;
+  }
+  throw std::runtime_error("max_abs_device unsupported dtype");
+}
+
 // Very small FP32->FP16 conversion (sufficient for inference inputs).
 static uint16_t f32_to_fp16(float x) {
   // IEEE754 float -> half, round-to-nearest-even (approx; adequate for inputs).
@@ -1705,12 +1740,51 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   << " bytes=" << cache_len_out_bytes
                   << " value=" << cache_len_out_val << "\n";
       }
-      if (cache_len_out_val < 0) {
-        throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out < 0 (value=" +
-                                 std::to_string(cache_len_out_val) + ")");
+      static std::atomic<int> cache_out_state{-1};  // -1 unknown, 0 zero, 1 nonzero
+      static std::atomic<bool> cache_out_logged{false};
+      if (cache_out_state.load() < 0) {
+        const char* cache_ch_out_name = resolve_tensor_name(session->enc, "cache_last_channel_out");
+        const char* cache_tm_out_name = resolve_tensor_name(session->enc, "cache_last_time_out");
+        if (!cache_ch_out_name || !cache_tm_out_name) {
+          throw std::runtime_error("Missing cache output tensor binding");
+        }
+        const auto cache_ch_out_shape = session->enc.ctx->getTensorShape(cache_ch_out_name);
+        const auto cache_tm_out_shape = session->enc.ctx->getTensorShape(cache_tm_out_name);
+        const auto cache_ch_out_dt = session->enc.engine->getTensorDataType(cache_ch_out_name);
+        const auto cache_tm_out_dt = session->enc.engine->getTensorDataType(cache_tm_out_name);
+        const size_t cache_ch_out_count = volume(cache_ch_out_shape);
+        const size_t cache_tm_out_count = volume(cache_tm_out_shape);
+        const float cache_ch_out_max =
+            max_abs_device(session->d_cache_last_channel_out, cache_ch_out_count, cache_ch_out_dt, session->stream,
+                           "enc:cache_ch_out", &session->debug);
+        const float cache_tm_out_max =
+            max_abs_device(session->d_cache_last_time_out, cache_tm_out_count, cache_tm_out_dt, session->stream,
+                           "enc:cache_tm_out", &session->debug);
+        const float max_eps = 1.0e-6f;
+        const int new_state = (cache_ch_out_max < max_eps && cache_tm_out_max < max_eps) ? 0 : 1;
+        cache_out_state.store(new_state);
+        if (!cache_out_logged.exchange(true)) {
+          std::cerr << "[parakeet_trt] cache_out max_abs cache_last_channel_out=" << cache_ch_out_max
+                    << " cache_last_time_out=" << cache_tm_out_max
+                    << " state=" << new_state << "\n";
+        }
       }
-      if (cache_len_out_val > 0) {
+
+      if (cache_len_out_val == 0) {
+        // OK: chunk-isolated regime.
+      } else if (cache_len_out_val == -1) {
+        static std::atomic<bool> warned{false};
+        if (cache_out_state.load() > 0) {
+          throw std::runtime_error("Streaming contract violated: cache_len_out=-1 but cache_out nonzero");
+        }
+        if (!warned.exchange(true)) {
+          std::cerr << "[parakeet_trt] WARN: cache_last_channel_len_out=-1 sentinel; treating cache as disabled\n";
+        }
+      } else if (cache_len_out_val > 0) {
         throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out > 0 (value=" +
+                                 std::to_string(cache_len_out_val) + ")");
+      } else {
+        throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out < -1 (value=" +
                                  std::to_string(cache_len_out_val) + ")");
       }
     }
