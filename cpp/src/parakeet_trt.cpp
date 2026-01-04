@@ -612,6 +612,8 @@ static std::atomic<int> g_empty_text_dump_n{0};
 static std::atomic<int> g_slice_dbg_n{0};
 static std::atomic<int> g_joint_stats_n{0};
 static std::atomic<int> g_joint_in_stats_n{0};
+static std::atomic<int> g_enc_out_stats_n{0};
+static std::atomic<int> g_cache_len_in_dbg_n{0};
 static bool is_control_token_str(const std::string& tok) {
   if (tok.empty()) return false;
   if (tok == "<blank>" || tok == "<pad>" || tok == "<unk>") return true;
@@ -1705,6 +1707,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       if (cache_len_in_dt != nvinfer1::DataType::kINT64 && cache_len_in_dt != nvinfer1::DataType::kINT32) {
         throw std::runtime_error("cache_last_channel_len dtype must be int32 or int64");
       }
+      const auto cache_len_in_shape = session->enc.ctx->getTensorShape(cache_len_in_name);
+      const size_t cache_len_in_bytes = volume(cache_len_in_shape) * dtype_size(cache_len_in_dt);
       if (!session->cache_len_in_set) {
         session->cache_len_in = 0;
       }
@@ -1716,6 +1720,16 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         const int32_t cache_len_in_host = static_cast<int32_t>(session->cache_len_in);
         debug_memcpy_async(session->d_cache_last_channel_len, &cache_len_in_host, sizeof(cache_len_in_host),
                            cudaMemcpyHostToDevice, session->stream, "enc:cache_len_in", &session->debug);
+      }
+      const int cache_len_dbg = g_cache_len_in_dbg_n.fetch_add(1, std::memory_order_relaxed);
+      if (cache_len_dbg < 6 || session->cache_len_in != 0) {
+        std::cerr << "[parakeet_trt] cache_len_in value=" << session->cache_len_in
+                  << " dtype=" << dtype_name(cache_len_in_dt)
+                  << " dims=" << dims_to_string(cache_len_in_shape)
+                  << " bytes=" << cache_len_in_bytes
+                  << " d_ptr=0x" << std::hex
+                  << reinterpret_cast<uintptr_t>(session->d_cache_last_channel_len)
+                  << std::dec << "\n";
       }
       const char* cache_len_out_name = resolve_tensor_name(session->enc, "cache_last_channel_len_out");
       if (!cache_len_out_name) {
@@ -1958,6 +1972,40 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       debug_memcpy_async(host_enc_out_f32.data(), session->d_enc_out, host_enc_out_f32.size() * 4,
                          cudaMemcpyDeviceToHost, session->stream, "enc:out_f32", &session->debug);
       cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize");
+    }
+    {
+      size_t nan_ct = 0;
+      size_t inf_ct = 0;
+      size_t finite_ct = 0;
+      float min_v = std::numeric_limits<float>::infinity();
+      float max_v = -std::numeric_limits<float>::infinity();
+      for (size_t i = 0; i < host_enc_out_f32.size(); ++i) {
+        const float v = host_enc_out_f32[i];
+        if (std::isnan(v)) {
+          nan_ct++;
+        } else if (std::isinf(v)) {
+          inf_ct++;
+        } else {
+          finite_ct++;
+          if (v < min_v) min_v = v;
+          if (v > max_v) max_v = v;
+        }
+      }
+      const int dbg_n = g_enc_out_stats_n.fetch_add(1, std::memory_order_relaxed);
+      if (dbg_n < 6 || nan_ct > 0) {
+        const size_t bytes = host_enc_out_f32.size() * sizeof(float);
+        std::cerr << "[parakeet_trt] enc_out_stats dt=" << dtype_name(enc_out_dt)
+                  << " d_ptr=0x" << std::hex << reinterpret_cast<uintptr_t>(session->d_enc_out) << std::dec
+                  << " h_ptr=0x" << std::hex << reinterpret_cast<uintptr_t>(host_enc_out_f32.data()) << std::dec
+                  << " bytes=" << bytes
+                  << " T_enc=" << T_enc
+                  << " nan_ct=" << nan_ct
+                  << " inf_ct=" << inf_ct
+                  << " finite_ct=" << finite_ct
+                  << " min_v=" << (finite_ct ? min_v : 0.0f)
+                  << " max_v=" << (finite_ct ? max_v : 0.0f)
+                  << "\n";
+      }
     }
 
     // STREAMING MODE (chunk-isolated):
