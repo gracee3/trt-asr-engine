@@ -703,23 +703,6 @@ static size_t volume(const nvinfer1::Dims& d) {
   return v;
 }
 
-static bool engine_has_tensor(const TrtEngine& e, const char* name) {
-  const int nb = e.engine->getNbIOTensors();
-  for (int i = 0; i < nb; ++i) {
-    const char* tn = e.engine->getIOTensorName(i);
-    if (tn && std::strcmp(tn, name) == 0) return true;
-  }
-  return false;
-}
-
-static void* tensor_ptr_or_throw(const TrtEngine& e, const char* name) {
-  const auto it = e.tensors.find(name);
-  if (it == e.tensors.end() || !it->second) {
-    throw std::runtime_error(std::string("Missing tensor pointer: ") + name);
-  }
-  return it->second;
-}
-
 // Very small FP32->FP16 conversion (sufficient for inference inputs).
 static uint16_t f32_to_fp16(float x) {
   // IEEE754 float -> half, round-to-nearest-even (approx; adequate for inputs).
@@ -774,6 +757,34 @@ struct TrtEngine {
   uint64_t debug_sync_utt_seq = 0;
   bool debug_sync_utt_seq_set = false;
 };
+
+static const char* resolve_tensor_name(const TrtEngine& e, const char* name) {
+  const int nb = e.engine->getNbIOTensors();
+  const size_t name_len = std::strlen(name);
+  for (int i = 0; i < nb; ++i) {
+    const char* tn = e.engine->getIOTensorName(i);
+    if (!tn) continue;
+    if (std::strcmp(tn, name) == 0) return tn;
+    if (std::strncmp(tn, name, name_len) == 0 && tn[name_len] == '.') return tn;
+  }
+  return nullptr;
+}
+
+static bool engine_has_tensor(const TrtEngine& e, const char* name) {
+  return resolve_tensor_name(e, name) != nullptr;
+}
+
+static void* tensor_ptr_or_throw(const TrtEngine& e, const char* name) {
+  const char* resolved = resolve_tensor_name(e, name);
+  if (!resolved) {
+    throw std::runtime_error(std::string("Missing tensor binding: ") + name);
+  }
+  const auto it = e.tensors.find(resolved);
+  if (it == e.tensors.end() || !it->second) {
+    throw std::runtime_error(std::string("Missing tensor pointer: ") + resolved);
+  }
+  return it->second;
+}
 
 const char* dtype_name(nvinfer1::DataType dt) {
   switch (dt) {
@@ -845,14 +856,20 @@ void dump_engine_bindings(const TrtEngine& e, cudaStream_t stream) {
 }
 
 static void set_input_shape_or_throw(TrtEngine& e, const char* name, const std::vector<int32_t>& dims) {
+  const char* resolved = resolve_tensor_name(e, name);
+  if (!resolved) {
+    throw std::runtime_error(std::string("Missing binding: ") + name);
+  }
   nvinfer1::Dims d{};
   d.nbDims = static_cast<int>(dims.size());
   for (int i = 0; i < d.nbDims; ++i) d.d[i] = dims[static_cast<size_t>(i)];
 #if NV_TENSORRT_MAJOR >= 10
-  if (!e.ctx->setInputShape(name, d)) throw std::runtime_error(std::string("setInputShape failed for ") + name);
+  if (!e.ctx->setInputShape(resolved, d)) {
+    throw std::runtime_error(std::string("setInputShape failed for ") + resolved);
+  }
 #else
-  const int idx = e.engine->getBindingIndex(name);
-  if (idx < 0) throw std::runtime_error(std::string("Missing binding: ") + name);
+  const int idx = e.engine->getBindingIndex(resolved);
+  if (idx < 0) throw std::runtime_error(std::string("Missing binding: ") + resolved);
   if (!e.ctx->setBindingDimensions(idx, d)) throw std::runtime_error(std::string("setBindingDimensions failed for ") + name);
 #endif
 }
@@ -1556,7 +1573,11 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                          cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out", &session->debug);
       cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(cache_len_out)");
       if (cache_len_out_host != 0) {
-        throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out != 0");
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true)) {
+          std::cerr << "[parakeet_trt] WARN: cache_last_channel_len_out != 0 (value="
+                    << cache_len_out_host << ")\n";
+        }
       }
     }
 

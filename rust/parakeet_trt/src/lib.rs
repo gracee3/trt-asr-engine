@@ -49,7 +49,19 @@ impl ParakeetSessionSafe {
     pub fn push_features(&self, features: &[f32], num_frames: usize) -> Result<(), ParakeetError> {
         let res = unsafe { parakeet_push_features(self.inner, features.as_ptr(), num_frames) };
         if res < 0 {
-            return Err(ParakeetError::InferenceError(format!("Error code {}", res)));
+            let mut err_msg: Option<String> = None;
+            for _ in 0..4 {
+                match self.poll_event() {
+                    Some(TranscriptionEvent::Error { message }) => {
+                        err_msg = Some(message);
+                        break;
+                    }
+                    Some(_) => continue,
+                    None => break,
+                }
+            }
+            let msg = err_msg.unwrap_or_else(|| format!("Error code {}", res));
+            return Err(ParakeetError::InferenceError(msg));
         }
         Ok(())
     }
