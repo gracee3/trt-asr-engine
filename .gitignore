@@ -40,3 +40,6 @@ trt_stability_*.png
 .cursor
 .vscode
 .claude
+debug_artifacts/
+
+

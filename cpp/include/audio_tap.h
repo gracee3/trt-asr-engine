@@ -234,6 +234,8 @@ public:
         if (!is_tap_enabled(stage_name)) return;
 
         enabled_ = true;
+        // Cache run_dir now to avoid static destruction order issues
+        run_dir_ = TapConfig::instance().run_dir;
 
         // Record start time
         struct timespec ts;
@@ -241,8 +243,7 @@ public:
         start_monotonic_ns_ = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 
         // Open files in run-isolated directory
-        const std::string& dir = TapConfig::instance().run_dir;
-        std::string base_path = dir + "/tap_" + sanitized_name_;
+        std::string base_path = run_dir_ + "/tap_" + sanitized_name_;
 
         raw_file_ = std::fopen((base_path + ".raw").c_str(), "wb");
         if (!raw_file_) {
@@ -270,9 +271,8 @@ public:
         if (raw_file_) std::fclose(raw_file_);
         if (ndjson_file_) std::fclose(ndjson_file_);
 
-        // Write JSON sidecar
-        const std::string& dir = TapConfig::instance().run_dir;
-        std::string json_path = dir + "/tap_" + sanitized_name_ + ".json";
+        // Write JSON sidecar (use cached run_dir_ to avoid static destruction order issues)
+        std::string json_path = run_dir_ + "/tap_" + sanitized_name_ + ".json";
         FILE* json_file = std::fopen(json_path.c_str(), "w");
         if (json_file) {
             uint64_t total_frames_with_gaps = stats_.total_frames + stats_.gap_frames;
@@ -524,6 +524,7 @@ private:
 
     std::string stage_name_;
     std::string sanitized_name_;
+    std::string run_dir_;  // Cached at construction to avoid static destruction order issues
     uint32_t sample_rate_;
     uint16_t channels_;
     Format format_;
@@ -571,13 +572,14 @@ public:
         if (!is_tap_enabled(name)) return;
 
         enabled_ = true;
+        // Cache run_dir now to avoid static destruction order issues
+        run_dir_ = TapConfig::instance().run_dir;
 
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
         start_monotonic_ns_ = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 
-        const std::string& dir = TapConfig::instance().run_dir;
-        std::string base_path = dir + "/tap_" + sanitized_name_;
+        std::string base_path = run_dir_ + "/tap_" + sanitized_name_;
 
         raw_file_ = std::fopen((base_path + ".raw").c_str(), "wb");
         if (!raw_file_) {
@@ -599,8 +601,8 @@ public:
 
         if (raw_file_) std::fclose(raw_file_);
 
-        const std::string& dir = TapConfig::instance().run_dir;
-        std::string json_path = dir + "/tap_" + sanitized_name_ + ".json";
+        // Use cached run_dir_ to avoid static destruction order issues
+        std::string json_path = run_dir_ + "/tap_" + sanitized_name_ + ".json";
         FILE* json_file = std::fopen(json_path.c_str(), "w");
         if (json_file) {
             double frame_rate_hz = 1000.0 / frame_shift_ms_;
@@ -711,6 +713,7 @@ public:
 private:
     std::string name_;
     std::string sanitized_name_;
+    std::string run_dir_;  // Cached at construction to avoid static destruction order issues
     size_t mel_bins_;
     float frame_shift_ms_;
     float window_ms_;
