@@ -611,6 +611,7 @@ static std::atomic<int> g_dbg_n{0};
 static std::atomic<int> g_empty_text_dump_n{0};
 static std::atomic<int> g_slice_dbg_n{0};
 static std::atomic<int> g_joint_stats_n{0};
+static std::atomic<int> g_joint_in_stats_n{0};
 static bool is_control_token_str(const std::string& tok) {
   if (tok.empty()) return false;
   if (tok == "<blank>" || tok == "<pad>" || tok == "<unk>") return true;
@@ -2111,6 +2112,66 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                       << " max_v=" << (finite_ct ? max_v : 0.0f)
                       << "\n";
           }
+          if (nan_ct > 0) {
+            const int in_dbg = g_joint_in_stats_n.fetch_add(1, std::memory_order_relaxed);
+            if (in_dbg < 6) {
+              auto log_stats = [&](const char* label, const float* data, size_t n) {
+                size_t n_nan = 0;
+                size_t n_inf = 0;
+                size_t n_fin = 0;
+                float mn = std::numeric_limits<float>::infinity();
+                float mx = -std::numeric_limits<float>::infinity();
+                for (size_t i = 0; i < n; ++i) {
+                  const float v = data[i];
+                  if (std::isnan(v)) {
+                    n_nan++;
+                  } else if (std::isinf(v)) {
+                    n_inf++;
+                  } else {
+                    n_fin++;
+                    if (v < mn) mn = v;
+                    if (v > mx) mx = v;
+                  }
+                }
+                std::cerr << "[parakeet_trt] joint_in_stats label=" << label
+                          << " n=" << n
+                          << " nan_ct=" << n_nan
+                          << " inf_ct=" << n_inf
+                          << " finite_ct=" << n_fin
+                          << " min_v=" << (n_fin ? mn : 0.0f)
+                          << " max_v=" << (n_fin ? mx : 0.0f)
+                          << "\n";
+              };
+
+              log_stats("enc_host_f32", host_joint_enc_slice_f32.data(), host_joint_enc_slice_f32.size());
+
+              const char* pred_name = resolve_tensor_name(session->joint, "predictor_output");
+              nvinfer1::DataType pred_dt = pred_name ? session->joint.engine->getTensorDataType(pred_name) : joint_enc_dt;
+              const auto pred_shape = pred_name ? session->joint.ctx->getTensorShape(pred_name) : session->joint.ctx->getTensorShape("predictor_output");
+              const size_t pred_bytes = volume(pred_shape) * dtype_size(pred_dt);
+              std::cerr << "[parakeet_trt] joint_in_ptrs d_joint_out=0x" << std::hex
+                        << reinterpret_cast<uintptr_t>(session->d_joint_out)
+                        << " d_joint_enc_in=0x" << reinterpret_cast<uintptr_t>(session->d_joint_enc_in)
+                        << " d_joint_pred_in=0x" << reinterpret_cast<uintptr_t>(session->d_joint_pred_in)
+                        << std::dec << " pred_bytes=" << pred_bytes << "\n";
+
+              if (pred_dt == nvinfer1::DataType::kHALF) {
+                std::vector<uint16_t> pred_h16(pred_bytes / 2);
+                debug_memcpy_async(pred_h16.data(), session->d_joint_pred_in, pred_bytes,
+                                   cudaMemcpyDeviceToHost, session->stream, "joint:pred_in_fp16", &session->debug);
+                cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_pred_in");
+                std::vector<float> pred_f32(pred_h16.size());
+                for (size_t i = 0; i < pred_h16.size(); ++i) pred_f32[i] = fp16_to_f32(pred_h16[i]);
+                log_stats("pred_in_fp16", pred_f32.data(), pred_f32.size());
+              } else {
+                std::vector<float> pred_f32(pred_bytes / 4);
+                debug_memcpy_async(pred_f32.data(), session->d_joint_pred_in, pred_bytes,
+                                   cudaMemcpyDeviceToHost, session->stream, "joint:pred_in_f32", &session->debug);
+                cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_pred_in");
+                log_stats("pred_in_fp32", pred_f32.data(), pred_f32.size());
+              }
+            }
+          }
         } else {
           debug_memcpy_async(session->host_joint_logits_f32.data(), session->d_joint_out,
                              session->host_joint_logits_f32.size() * 4, cudaMemcpyDeviceToHost, session->stream,
@@ -2151,6 +2212,66 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                       << " min_v=" << (finite_ct ? min_v : 0.0f)
                       << " max_v=" << (finite_ct ? max_v : 0.0f)
                       << "\n";
+          }
+          if (nan_ct > 0) {
+            const int in_dbg = g_joint_in_stats_n.fetch_add(1, std::memory_order_relaxed);
+            if (in_dbg < 6) {
+              auto log_stats = [&](const char* label, const float* data, size_t n) {
+                size_t n_nan = 0;
+                size_t n_inf = 0;
+                size_t n_fin = 0;
+                float mn = std::numeric_limits<float>::infinity();
+                float mx = -std::numeric_limits<float>::infinity();
+                for (size_t i = 0; i < n; ++i) {
+                  const float v = data[i];
+                  if (std::isnan(v)) {
+                    n_nan++;
+                  } else if (std::isinf(v)) {
+                    n_inf++;
+                  } else {
+                    n_fin++;
+                    if (v < mn) mn = v;
+                    if (v > mx) mx = v;
+                  }
+                }
+                std::cerr << "[parakeet_trt] joint_in_stats label=" << label
+                          << " n=" << n
+                          << " nan_ct=" << n_nan
+                          << " inf_ct=" << n_inf
+                          << " finite_ct=" << n_fin
+                          << " min_v=" << (n_fin ? mn : 0.0f)
+                          << " max_v=" << (n_fin ? mx : 0.0f)
+                          << "\n";
+              };
+
+              log_stats("enc_host_f32", host_joint_enc_slice_f32.data(), host_joint_enc_slice_f32.size());
+
+              const char* pred_name = resolve_tensor_name(session->joint, "predictor_output");
+              nvinfer1::DataType pred_dt = pred_name ? session->joint.engine->getTensorDataType(pred_name) : joint_enc_dt;
+              const auto pred_shape = pred_name ? session->joint.ctx->getTensorShape(pred_name) : session->joint.ctx->getTensorShape("predictor_output");
+              const size_t pred_bytes = volume(pred_shape) * dtype_size(pred_dt);
+              std::cerr << "[parakeet_trt] joint_in_ptrs d_joint_out=0x" << std::hex
+                        << reinterpret_cast<uintptr_t>(session->d_joint_out)
+                        << " d_joint_enc_in=0x" << reinterpret_cast<uintptr_t>(session->d_joint_enc_in)
+                        << " d_joint_pred_in=0x" << reinterpret_cast<uintptr_t>(session->d_joint_pred_in)
+                        << std::dec << " pred_bytes=" << pred_bytes << "\n";
+
+              if (pred_dt == nvinfer1::DataType::kHALF) {
+                std::vector<uint16_t> pred_h16(pred_bytes / 2);
+                debug_memcpy_async(pred_h16.data(), session->d_joint_pred_in, pred_bytes,
+                                   cudaMemcpyDeviceToHost, session->stream, "joint:pred_in_fp16", &session->debug);
+                cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_pred_in");
+                std::vector<float> pred_f32(pred_h16.size());
+                for (size_t i = 0; i < pred_h16.size(); ++i) pred_f32[i] = fp16_to_f32(pred_h16[i]);
+                log_stats("pred_in_fp16", pred_f32.data(), pred_f32.size());
+              } else {
+                std::vector<float> pred_f32(pred_bytes / 4);
+                debug_memcpy_async(pred_f32.data(), session->d_joint_pred_in, pred_bytes,
+                                   cudaMemcpyDeviceToHost, session->stream, "joint:pred_in_f32", &session->debug);
+                cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_pred_in");
+                log_stats("pred_in_fp32", pred_f32.data(), pred_f32.size());
+              }
+            }
           }
         }
 
