@@ -853,6 +853,111 @@ static void log_device_sample_stats(const char* label,
             << "\n";
 }
 
+// NaN/Inf guard with detailed context logging
+// Returns: {nan_count, inf_count} - logs warning if non-zero
+// Set PARAKEET_NAN_GUARD_HALT=1 to abort on first NaN/Inf detection
+struct NanGuardResult {
+  size_t nan_count;
+  size_t inf_count;
+  size_t finite_count;
+  float first_nan_idx;
+  float first_inf_idx;
+  bool has_issues() const { return nan_count > 0 || inf_count > 0; }
+};
+
+static NanGuardResult nan_guard_device(const char* stage,
+                                       void* ptr,
+                                       size_t count,
+                                       nvinfer1::DataType dt,
+                                       cudaStream_t stream,
+                                       const DebugContext* ctx,
+                                       int64_t cache_len_in = -1,
+                                       int64_t length_in = -1,
+                                       int chunk_idx = -1,
+                                       int feature_idx = -1) {
+  NanGuardResult result = {0, 0, 0, -1.0f, -1.0f};
+  if (!ptr || count == 0) return result;
+
+  // Check if guard is enabled (default: enabled for first 10 chunks, then 1-in-100)
+  static std::atomic<int> s_guard_count{0};
+  const int guard_n = s_guard_count.fetch_add(1, std::memory_order_relaxed);
+  const bool force_check = get_env_bool("PARAKEET_NAN_GUARD_ALWAYS", false);
+  if (!force_check && guard_n >= 10 && (guard_n % 100) != 0) {
+    return result;
+  }
+
+  // Sample up to 4096 elements for checking
+  const size_t sample_n = std::min<size_t>(count, 4096);
+  std::vector<float> host_f32(sample_n);
+
+  if (dt == nvinfer1::DataType::kHALF) {
+    std::vector<uint16_t> host_fp16(sample_n);
+    debug_memcpy_async(host_fp16.data(), ptr, sample_n * sizeof(uint16_t),
+                       cudaMemcpyDeviceToHost, stream, stage, ctx);
+    cuda_check(cudaStreamSynchronize(stream), "nan_guard:sync");
+    for (size_t i = 0; i < sample_n; ++i) {
+      host_f32[i] = fp16_to_f32(host_fp16[i]);
+    }
+  } else if (dt == nvinfer1::DataType::kFLOAT) {
+    debug_memcpy_async(host_f32.data(), ptr, sample_n * sizeof(float),
+                       cudaMemcpyDeviceToHost, stream, stage, ctx);
+    cuda_check(cudaStreamSynchronize(stream), "nan_guard:sync");
+  } else {
+    return result;
+  }
+
+  // Scan for NaN/Inf
+  for (size_t i = 0; i < sample_n; ++i) {
+    const float v = host_f32[i];
+    if (std::isnan(v)) {
+      if (result.nan_count == 0) result.first_nan_idx = static_cast<float>(i);
+      result.nan_count++;
+    } else if (std::isinf(v)) {
+      if (result.inf_count == 0) result.first_inf_idx = static_cast<float>(i);
+      result.inf_count++;
+    } else {
+      result.finite_count++;
+    }
+  }
+
+  // Log if issues found
+  if (result.has_issues()) {
+    std::cerr << "[parakeet_trt] NAN_GUARD ALERT stage=" << stage
+              << " nan_count=" << result.nan_count
+              << " inf_count=" << result.inf_count
+              << " finite_count=" << result.finite_count
+              << " sample_n=" << sample_n << "/" << count
+              << " dtype=" << dtype_name(dt);
+    if (cache_len_in >= 0) std::cerr << " cache_len_in=" << cache_len_in;
+    if (length_in >= 0) std::cerr << " length_in=" << length_in;
+    if (chunk_idx >= 0) std::cerr << " chunk_idx=" << chunk_idx;
+    if (feature_idx >= 0) std::cerr << " feature_idx=" << feature_idx;
+    if (result.nan_count > 0) std::cerr << " first_nan_idx=" << static_cast<int>(result.first_nan_idx);
+    if (result.inf_count > 0) std::cerr << " first_inf_idx=" << static_cast<int>(result.first_inf_idx);
+    std::cerr << "\n";
+
+    // Dump first few values around NaN/Inf for debugging
+    if (result.nan_count > 0 || result.inf_count > 0) {
+      const size_t dump_start = std::max<size_t>(0, static_cast<size_t>(
+          result.nan_count > 0 ? result.first_nan_idx : result.first_inf_idx) - 3);
+      const size_t dump_end = std::min<size_t>(sample_n, dump_start + 10);
+      std::cerr << "[parakeet_trt] NAN_GUARD values[" << dump_start << ".." << dump_end << "]:";
+      for (size_t i = dump_start; i < dump_end; ++i) {
+        std::cerr << " " << host_f32[i];
+      }
+      std::cerr << "\n";
+    }
+
+    // Optionally halt on NaN/Inf for debugging
+    if (get_env_bool("PARAKEET_NAN_GUARD_HALT", false)) {
+      std::cerr << "[parakeet_trt] NAN_GUARD_HALT enabled, aborting\n";
+      std::abort();
+    }
+  }
+
+  return result;
+}
+
 // Very small FP32->FP16 conversion (sufficient for inference inputs).
 static uint16_t f32_to_fp16(float x) {
   // IEEE754 float -> half, round-to-nearest-even (approx; adequate for inputs).
@@ -1811,6 +1916,48 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       if (!session->cache_len_in_set) {
         session->cache_len_in = 0;
       }
+
+      // PARAKEET_CACHE_LEN_OVERRIDE: force a specific cache_len value for debugging
+      // Set to -1 to use cache_len_capacity, or any non-negative value to override
+      {
+        static int64_t s_cache_len_override = -2;  // -2 = not initialized
+        static std::once_flag s_override_init;
+        std::call_once(s_override_init, []() {
+          const char* env = std::getenv("PARAKEET_CACHE_LEN_OVERRIDE");
+          if (env && *env) {
+            try {
+              s_cache_len_override = std::stoll(env);
+              std::cerr << "[parakeet_trt] PARAKEET_CACHE_LEN_OVERRIDE=" << s_cache_len_override << "\n";
+            } catch (...) {
+              std::cerr << "[parakeet_trt] WARNING: Invalid PARAKEET_CACHE_LEN_OVERRIDE value\n";
+              s_cache_len_override = -2;
+            }
+          }
+        });
+        if (s_cache_len_override == -1 && session->cache_len_capacity > 0) {
+          // Use capacity as override
+          session->cache_len_in = session->cache_len_capacity;
+          session->cache_len_in_set = true;
+        } else if (s_cache_len_override >= 0) {
+          session->cache_len_in = s_cache_len_override;
+          session->cache_len_in_set = true;
+        }
+      }
+
+      // Clamp cache_len_in to capacity to prevent out-of-bounds access
+      const int64_t cache_len_in_unclamped = session->cache_len_in;
+      if (session->cache_len_capacity > 0 && session->cache_len_in > session->cache_len_capacity) {
+        std::cerr << "[parakeet_trt] WARNING: cache_len_in=" << session->cache_len_in
+                  << " exceeds capacity=" << session->cache_len_capacity
+                  << ", clamping\n";
+        session->cache_len_in = session->cache_len_capacity;
+      }
+      if (session->cache_len_in < 0) {
+        std::cerr << "[parakeet_trt] WARNING: cache_len_in=" << session->cache_len_in
+                  << " is negative, clamping to 0\n";
+        session->cache_len_in = 0;
+      }
+
       if (cache_len_in_dt == nvinfer1::DataType::kINT64) {
         const int64_t cache_len_in_host = session->cache_len_in;
         debug_memcpy_async(session->d_cache_last_channel_len, &cache_len_in_host, sizeof(cache_len_in_host),
@@ -1823,6 +1970,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       const int cache_len_dbg = g_cache_len_in_dbg_n.fetch_add(1, std::memory_order_relaxed);
       if (cache_len_dbg < 6 || session->cache_len_in != 0) {
         std::cerr << "[parakeet_trt] cache_len_in value=" << session->cache_len_in
+                  << " (unclamped=" << cache_len_in_unclamped << ")"
+                  << " capacity=" << session->cache_len_capacity
                   << " dtype=" << dtype_name(cache_len_in_dt)
                   << " dims=" << dims_to_string(cache_len_in_shape)
                   << " bytes=" << cache_len_in_bytes
@@ -1949,6 +2098,39 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     debug_stage_marker("enc:post_enqueue", &session->debug, session->stream);
     cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(encoder)");
     debug_stage_marker("enc:post_sync", &session->debug, session->stream);
+
+    // NaN guard: check encoder output
+    {
+      const char* enc_out_name = resolve_tensor_name(session->enc, "encoder_output");
+      if (enc_out_name) {
+        const auto enc_out_shape = session->enc.ctx->getTensorShape(enc_out_name);
+        const auto enc_out_dt = session->enc.engine->getTensorDataType(enc_out_name);
+        nan_guard_device("enc_output", session->d_enc_out, volume(enc_out_shape),
+                         enc_out_dt, session->stream, &session->debug,
+                         session->cache_len_in, T_valid,
+                         static_cast<int>(session->debug.audio_chunk_idx),
+                         static_cast<int>(session->debug.feature_idx));
+      }
+      // Check cache outputs if streaming
+      if (session->enc_streaming && session->cache_ch_out_ptr) {
+        const char* cache_ch_out_name = resolve_tensor_name(session->enc, "cache_last_channel_out");
+        const char* cache_tm_out_name = resolve_tensor_name(session->enc, "cache_last_time_out");
+        if (cache_ch_out_name) {
+          const auto cache_ch_out_shape = session->enc.ctx->getTensorShape(cache_ch_out_name);
+          const auto cache_ch_out_dt = session->enc.engine->getTensorDataType(cache_ch_out_name);
+          nan_guard_device("enc_cache_ch_out", session->cache_ch_out_ptr,
+                           volume(cache_ch_out_shape), cache_ch_out_dt,
+                           session->stream, &session->debug, session->cache_len_in, T_valid);
+        }
+        if (cache_tm_out_name) {
+          const auto cache_tm_out_shape = session->enc.ctx->getTensorShape(cache_tm_out_name);
+          const auto cache_tm_out_dt = session->enc.engine->getTensorDataType(cache_tm_out_name);
+          nan_guard_device("enc_cache_tm_out", session->cache_tm_out_ptr,
+                           volume(cache_tm_out_shape), cache_tm_out_dt,
+                           session->stream, &session->debug, session->cache_len_in, T_valid);
+        }
+      }
+    }
 
     // Read encoded length.
     int64_t enc_len_host = 0;
@@ -2314,6 +2496,16 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                       << "\n";
           }
           if (nan_ct > 0) {
+            // Enhanced NaN alert with cache/length context for FP16 joint path
+            std::cerr << "[parakeet_trt] NAN_GUARD ALERT stage=joint_out_fp16"
+                      << " nan_count=" << nan_ct
+                      << " inf_count=" << inf_ct
+                      << " cache_len_in=" << session->cache_len_in
+                      << " T_valid=" << T_valid
+                      << " time_idx=" << time_idx
+                      << " u=" << u
+                      << " chunk_idx=" << session->debug.audio_chunk_idx
+                      << "\n";
             const int in_dbg = g_joint_in_stats_n.fetch_add(1, std::memory_order_relaxed);
             if (in_dbg < 6) {
               auto log_stats = [&](const char* label, const float* data, size_t n) {
@@ -2415,6 +2607,16 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                       << "\n";
           }
           if (nan_ct > 0) {
+            // Enhanced NaN alert with cache/length context for FP32 joint path
+            std::cerr << "[parakeet_trt] NAN_GUARD ALERT stage=joint_out_fp32"
+                      << " nan_count=" << nan_ct
+                      << " inf_count=" << inf_ct
+                      << " cache_len_in=" << session->cache_len_in
+                      << " T_valid=" << T_valid
+                      << " time_idx=" << time_idx
+                      << " u=" << u
+                      << " chunk_idx=" << session->debug.audio_chunk_idx
+                      << "\n";
             const int in_dbg = g_joint_in_stats_n.fetch_add(1, std::memory_order_relaxed);
             if (in_dbg < 6) {
               auto log_stats = [&](const char* label, const float* data, size_t n) {

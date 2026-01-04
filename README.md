@@ -136,9 +136,48 @@ The shared library will be at `cpp/build/libparakeet_trt.so`.
   - `tools/verify_nemo/`: NeMo verification harness (golden output)
   - `tools/export_onnx/`: deterministic NeMo → ONNX export (validated)
   - `tools/build_trt/`: TensorRT engine build scripts (WIP)
+  - `tools/analyze_tap.py`: audio/feature tap analysis tool
 - **`models/`**: local-only `.nemo` weights (gitignored; see `models/README.md`)
 - **`cpp/`**: C++ TensorRT runtime + C ABI
+  - `cpp/include/audio_tap.h`: reusable audio tap writer for pipeline debugging
 - **`rust/`**: feature extraction, FFI bindings, CLI demo
+- **`docs/`**: documentation
+  - `docs/debugging.md`: comprehensive debugging guide
+  - `docs/runtime_contract.md`: tensor interface contracts
+
+## Debugging integration issues
+
+See **[docs/debugging.md](docs/debugging.md)** for comprehensive debugging documentation.
+
+### Quick reference: environment variables
+
+```bash
+# Audio taps (for Magnolia integration)
+AUDIO_TAP_ENABLE=1          # Enable all audio taps
+AUDIO_TAP_FEATURES=1        # Enable feature tap in trt-asr-engine
+
+# NaN guards
+PARAKEET_NAN_GUARD_ALWAYS=1 # Check every chunk for NaN/Inf
+PARAKEET_NAN_GUARD_HALT=1   # Abort on first NaN/Inf
+
+# Cache debugging
+PARAKEET_CACHE_LEN_OVERRIDE=-1  # Use cache capacity as cache_len
+```
+
+### Replay harness
+
+The Rust CLI supports replaying captured audio/features for deterministic reproduction:
+
+```bash
+# Replay WAV file
+./target/debug/cli test.wav --model-dir ./models/parakeet-tdt-0.6b-v3 -v
+
+# Replay raw PCM tap
+./target/debug/cli tap_post_dsp.raw --raw-pcm --model-dir ./models/... -v
+
+# Replay feature tap (bypass feature extraction)
+./target/debug/cli tap_features.raw --features-input --model-dir ./models/... -v
+```
 
 ## Licensing & attribution
 
