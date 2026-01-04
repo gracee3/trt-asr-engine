@@ -1799,24 +1799,28 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
     // Feature tap: dump input mel features when AUDIO_TAP_FEATURES=1
     // This is "tap point 3" - STT features as delivered to the engine
-    // Output: tap_features.raw (f32le, 128 channels interleaved by time)
-    // Convert: ffmpeg -f f32le -ar 100 -ac 128 -i tap_features.raw tap_features_vis.wav
-    // Or use analyze_tap.py for spectrogram visualization
+    // Output: tap_FEATURES.raw (f32le, bins_major [128, T])
+    // Use analyze_tap.py --features for visualization
     {
-      static std::unique_ptr<audio_tap::AudioTapWriter> s_feature_tap;
+      static std::unique_ptr<audio_tap::FeatureTapWriter> s_feature_tap;
       static std::once_flag s_feature_tap_init;
       std::call_once(s_feature_tap_init, []() {
-        if (audio_tap::TapRegistry::instance().is_tap_enabled("FEATURES")) {
-          // Features are [128, T] mel-major, treating as 128-channel signal
-          // Frame rate is 100 Hz (10ms hop), so we use "sample_rate" = 100
-          s_feature_tap = std::make_unique<audio_tap::AudioTapWriter>(
-              "features", 100, 128, audio_tap::Format::F32LE,
-              "log-mel features [128, T] column-major, 100 Hz frame rate");
+        if (audio_tap::is_tap_enabled("FEATURES")) {
+          // Features are [128, T] bins_major (mel-major) layout
+          // 10ms hop = 100 Hz frame rate, 25ms window, 16kHz audio
+          s_feature_tap = std::make_unique<audio_tap::FeatureTapWriter>(
+              "FEATURES",
+              kNMels,           // mel_bins = 128
+              10.0f,            // frame_shift_ms
+              25.0f,            // window_ms
+              16000,            // audio_sample_rate
+              "bins_major",     // layout: [C, T]
+              "log-mel features at push_features entry");
         }
       });
       if (s_feature_tap && s_feature_tap->is_enabled()) {
-        // features_bct_f32 is [128, T_valid] in column-major (mel-major) layout
-        s_feature_tap->write_f32(features_bct_f32, static_cast<size_t>(kNMels) * num_frames);
+        // features_bct_f32 is [128, T_valid] in bins_major layout
+        s_feature_tap->write_frames(features_bct_f32, num_frames);
       }
     }
 
