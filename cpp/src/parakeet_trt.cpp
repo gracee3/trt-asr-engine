@@ -16,6 +16,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <map>
 #include <memory>
@@ -609,6 +610,7 @@ static Logger gLogger;
 static std::atomic<int> g_dbg_n{0};
 static std::atomic<int> g_empty_text_dump_n{0};
 static std::atomic<int> g_slice_dbg_n{0};
+static std::atomic<int> g_joint_stats_n{0};
 static bool is_control_token_str(const std::string& tok) {
   if (tok.empty()) return false;
   if (tok == "<blank>" || tok == "<pad>" || tok == "<unk>") return true;
@@ -2071,17 +2073,84 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                              session->host_joint_logits_fp16.size() * 2, cudaMemcpyDeviceToHost, session->stream,
                              "joint:out_fp16", &session->debug);
           cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_out");
+          size_t nan_ct = 0;
+          size_t inf_ct = 0;
+          size_t finite_ct = 0;
+          float min_v = std::numeric_limits<float>::infinity();
+          float max_v = -std::numeric_limits<float>::infinity();
+          const size_t stats_n = static_cast<size_t>(head_dim);
           for (size_t i = 0; i < session->host_joint_logits_f32.size(); ++i) {
             float f = fp16_to_f32(session->host_joint_logits_fp16[i]);
+            if (i < stats_n) {
+              if (std::isnan(f)) {
+                nan_ct++;
+              } else if (std::isinf(f)) {
+                inf_ct++;
+              } else {
+                finite_ct++;
+                if (f < min_v) min_v = f;
+                if (f > max_v) max_v = f;
+              }
+            }
             session->host_joint_logits_f32[i] = std::isnan(f) ? -100.0f : f;
+          }
+          const int dbg_n = g_joint_stats_n.fetch_add(1, std::memory_order_relaxed);
+          if (dbg_n < 6) {
+            std::cerr << "[parakeet_trt] joint_out_stats dt=fp16"
+                      << " d_ptr=0x" << std::hex << reinterpret_cast<uintptr_t>(session->d_joint_out) << std::dec
+                      << " h_f32_ptr=0x" << std::hex
+                      << reinterpret_cast<uintptr_t>(session->host_joint_logits_f32.data()) << std::dec
+                      << " h_f16_ptr=0x" << std::hex
+                      << reinterpret_cast<uintptr_t>(session->host_joint_logits_fp16.data()) << std::dec
+                      << " bytes=" << (session->host_joint_logits_fp16.size() * 2)
+                      << " head_dim=" << head_dim
+                      << " nan_ct=" << nan_ct
+                      << " inf_ct=" << inf_ct
+                      << " finite_ct=" << finite_ct
+                      << " min_v=" << (finite_ct ? min_v : 0.0f)
+                      << " max_v=" << (finite_ct ? max_v : 0.0f)
+                      << "\n";
           }
         } else {
           debug_memcpy_async(session->host_joint_logits_f32.data(), session->d_joint_out,
                              session->host_joint_logits_f32.size() * 4, cudaMemcpyDeviceToHost, session->stream,
                              "joint:out_f32", &session->debug);
           cuda_check(cudaStreamSynchronize(session->stream), "sync_joint_out");
+          size_t nan_ct = 0;
+          size_t inf_ct = 0;
+          size_t finite_ct = 0;
+          float min_v = std::numeric_limits<float>::infinity();
+          float max_v = -std::numeric_limits<float>::infinity();
+          const size_t stats_n = static_cast<size_t>(head_dim);
           for (size_t i = 0; i < session->host_joint_logits_f32.size(); ++i) {
-            if (std::isnan(session->host_joint_logits_f32[i])) session->host_joint_logits_f32[i] = -100.0f;
+            float f = session->host_joint_logits_f32[i];
+            if (i < stats_n) {
+              if (std::isnan(f)) {
+                nan_ct++;
+              } else if (std::isinf(f)) {
+                inf_ct++;
+              } else {
+                finite_ct++;
+                if (f < min_v) min_v = f;
+                if (f > max_v) max_v = f;
+              }
+            }
+            if (std::isnan(f)) session->host_joint_logits_f32[i] = -100.0f;
+          }
+          const int dbg_n = g_joint_stats_n.fetch_add(1, std::memory_order_relaxed);
+          if (dbg_n < 6) {
+            std::cerr << "[parakeet_trt] joint_out_stats dt=fp32"
+                      << " d_ptr=0x" << std::hex << reinterpret_cast<uintptr_t>(session->d_joint_out) << std::dec
+                      << " h_f32_ptr=0x" << std::hex
+                      << reinterpret_cast<uintptr_t>(session->host_joint_logits_f32.data()) << std::dec
+                      << " bytes=" << (session->host_joint_logits_f32.size() * 4)
+                      << " head_dim=" << head_dim
+                      << " nan_ct=" << nan_ct
+                      << " inf_ct=" << inf_ct
+                      << " finite_ct=" << finite_ct
+                      << " min_v=" << (finite_ct ? min_v : 0.0f)
+                      << " max_v=" << (finite_ct ? max_v : 0.0f)
+                      << "\n";
           }
         }
 
