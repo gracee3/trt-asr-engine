@@ -36,3 +36,4 @@ cache_time_diagnostic.json
 # TRT parity results (when generated)
 trt_parity_*.json
 trt_stability_*.png
+.cargo-target-magnolia/

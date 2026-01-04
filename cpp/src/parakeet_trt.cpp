@@ -659,7 +659,7 @@ static void dbglog_ndjson(const char* hypothesisId,
                           const char* message,
                           const std::string& data_json) {
   // NOTE: debug mode log path (do not include secrets).
-  const char* kLogPath = "/home/emmy/git/parakeet/.cursor/debug.log";
+  const char* kLogPath = "/home/emmy/git/trt-asr-engine/.cursor/debug.log";
   // Gate to avoid log spam.
   const int n = g_dbg_n.fetch_add(1, std::memory_order_relaxed);
   if (n > 120) return;
