@@ -1986,9 +1986,41 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     std::vector<float> host_joint_logits_f32(static_cast<size_t>(kJointVocabSize));
 
     const auto partial_interval = std::chrono::milliseconds(100);
-    const bool dur_first = get_env_bool("PARAKEET_JOINT_DUR_FIRST", false);
-    const int tok_offset = dur_first ? kNumDurations : 0;
-    const int dur_offset = dur_first ? 0 : kTokenVocabSize;
+    int token_logit_size = kTokenVocabSize;
+    if (session->tokenizer) {
+      token_logit_size = std::max(session->tokenizer->vocab_size(), kBlankId + 1);
+    }
+    int joint_dim = kJointVocabSize;
+    {
+      const char* joint_out_name = resolve_tensor_name(session->joint, "joint_output");
+      if (joint_out_name) {
+        const auto dims = session->joint.ctx->getTensorShape(joint_out_name);
+        if (dims.nbDims > 0) {
+          joint_dim = dims.d[dims.nbDims - 1];
+        }
+      }
+    }
+    const int dur_bins = std::max(0, joint_dim - token_logit_size);
+    const bool dur_first = get_env_bool("PARAKEET_JOINT_DUR_FIRST", dur_bins > 0);
+    const int tok_offset = dur_first ? dur_bins : 0;
+    const int dur_offset = dur_first ? 0 : token_logit_size;
+    const int dur_bins_used = (dur_bins > 0) ? std::min(dur_bins, kNumDurations) : kNumDurations;
+    {
+      static std::once_flag once;
+      std::call_once(once, [&]() {
+        std::cerr << "[parakeet_trt] joint_slice joint_dim=" << joint_dim
+                  << " token_logit_size=" << token_logit_size
+                  << " dur_bins=" << dur_bins
+                  << " dur_first=" << (dur_first ? "1" : "0")
+                  << " tok_offset=" << tok_offset
+                  << " dur_bins_used=" << dur_bins_used
+                  << "\n";
+        if (dur_bins > 0 && dur_bins != kNumDurations) {
+          std::cerr << "[parakeet_trt] WARN: dur_bins mismatch runtime=" << dur_bins
+                    << " expected=" << kNumDurations << "\n";
+        }
+      });
+    }
 
     int time_idx = 0;
     int dbg_steps = 0;
@@ -2045,14 +2077,14 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         // Token argmax over [0..kTokenVocabSize)
         // Apply blank penalty (positive penalizes blank, negative boosts blank).
         const float blank_penalty = get_blank_penalty();
-        if (blank_penalty != 0.0f && kBlankId >= 0 && kBlankId < kTokenVocabSize) {
+        if (blank_penalty != 0.0f && kBlankId >= 0 && kBlankId < token_logit_size) {
           session->host_joint_logits_f32[static_cast<size_t>(tok_offset + kBlankId)] -= blank_penalty;
         }
         int best_tok = 0;
         float best_tok_v = session->host_joint_logits_f32[static_cast<size_t>(tok_offset)];
         int second_tok = -1;
         float second_tok_v = -1.0e9f;
-        for (int32_t i = 1; i < kTokenVocabSize; ++i) {
+        for (int32_t i = 1; i < token_logit_size; ++i) {
           const float v = session->host_joint_logits_f32[static_cast<size_t>(tok_offset + i)];
           if (v > best_tok_v) {
             second_tok = best_tok;
@@ -2082,7 +2114,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           int top_ids[k] = {0};
           float top_vals[k];
           for (int i = 0; i < k; ++i) top_vals[i] = -1.0e9f;
-          for (int32_t i = 0; i < kTokenVocabSize; ++i) {
+          for (int32_t i = 0; i < token_logit_size; ++i) {
             const float v = session->host_joint_logits_f32[static_cast<size_t>(tok_offset + i)];
             int insert = -1;
             for (int j = 0; j < k; ++j) {
@@ -2118,14 +2150,17 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   ",\"topk\":" + topk + "}");
         }
 
-        // Duration argmax over tail [kTokenVocabSize..kJointVocabSize)
+        // Duration argmax over tail [token_logit_size..joint_dim) or head when dur-first.
         int best_dur_idx = 0;
-        float best_dur_v = session->host_joint_logits_f32[static_cast<size_t>(dur_offset)];
-        for (int32_t i = 1; i < kNumDurations; ++i) {
-          const float v = session->host_joint_logits_f32[static_cast<size_t>(dur_offset + i)];
-          if (v > best_dur_v) {
-            best_dur_v = v;
-            best_dur_idx = i;
+        float best_dur_v = -1.0e9f;
+        if (dur_bins_used > 0) {
+          best_dur_v = session->host_joint_logits_f32[static_cast<size_t>(dur_offset)];
+          for (int32_t i = 1; i < dur_bins_used; ++i) {
+            const float v = session->host_joint_logits_f32[static_cast<size_t>(dur_offset + i)];
+            if (v > best_dur_v) {
+              best_dur_v = v;
+              best_dur_idx = i;
+            }
           }
         }
         const int duration = kDurationValues[best_dur_idx];
