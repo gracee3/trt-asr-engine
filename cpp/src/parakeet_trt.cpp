@@ -1528,6 +1528,19 @@ struct ParakeetSession {
 
   DebugContext debug;
 
+  // Stable host buffers for async memcpy (avoid stack aliasing).
+  bool host_ptrs_logged = false;
+  int64_t host_y = 0;
+  int64_t host_cache_len_in = 0;
+  int64_t host_length = 0;
+  int64_t host_enc_len = -1;
+  int64_t host_cache_len_out = -1;
+  int32_t host_y32 = 0;
+  int32_t host_cache_len_in32 = 0;
+  int32_t host_length32 = 0;
+  int32_t host_enc_len32 = -1;
+  int32_t host_cache_len_out32 = -1;
+
   // Predictor state buffers (device pointers).
   void* d_h = nullptr;
   void* d_c = nullptr;
@@ -1750,8 +1763,8 @@ void parakeet_reset_utterance(ParakeetSession* session) {
   // This seeds h/c and initializes y_id so decoding can continue across push_features calls.
   auto prime_token = [&](int32_t tok) {
     if (tok < 0) return;
-    const int64_t host_y = static_cast<int64_t>(tok);
-    debug_memcpy_async(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream,
+    session->host_y = static_cast<int64_t>(tok);
+    debug_memcpy_async(session->d_y, &session->host_y, sizeof(session->host_y), cudaMemcpyHostToDevice, session->stream,
                        "prime:y", &session->debug);
     enqueue_or_throw(session->pred, session->stream, &session->debug);
     cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(predictor_prime)");
@@ -1834,6 +1847,21 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
   if (num_frames == 0) return 0;
   try {
     debug_stage_marker("push_features:enter", &session->debug, session->stream);
+    if (!session->host_ptrs_logged) {
+      std::cerr << "[parakeet_trt] host_ptrs"
+                << " y64=0x" << std::hex << reinterpret_cast<uintptr_t>(&session->host_y)
+                << " cache_len_in64=0x" << reinterpret_cast<uintptr_t>(&session->host_cache_len_in)
+                << " length64=0x" << reinterpret_cast<uintptr_t>(&session->host_length)
+                << " enc_len64=0x" << reinterpret_cast<uintptr_t>(&session->host_enc_len)
+                << " cache_len_out64=0x" << reinterpret_cast<uintptr_t>(&session->host_cache_len_out)
+                << " y32=0x" << reinterpret_cast<uintptr_t>(&session->host_y32)
+                << " cache_len_in32=0x" << reinterpret_cast<uintptr_t>(&session->host_cache_len_in32)
+                << " length32=0x" << reinterpret_cast<uintptr_t>(&session->host_length32)
+                << " enc_len32=0x" << reinterpret_cast<uintptr_t>(&session->host_enc_len32)
+                << " cache_len_out32=0x" << reinterpret_cast<uintptr_t>(&session->host_cache_len_out32)
+                << std::dec << "\n";
+      session->host_ptrs_logged = true;
+    }
     // #region agent log
     dbglog_ndjson(
         "H8",
@@ -2009,12 +2037,12 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       }
 
       if (cache_len_in_dt == nvinfer1::DataType::kINT64) {
-        const int64_t cache_len_in_host = session->cache_len_in;
-        debug_memcpy_async(session->d_cache_last_channel_len, &cache_len_in_host, sizeof(cache_len_in_host),
+        session->host_cache_len_in = session->cache_len_in;
+        debug_memcpy_async(session->d_cache_last_channel_len, &session->host_cache_len_in, sizeof(session->host_cache_len_in),
                            cudaMemcpyHostToDevice, session->stream, "enc:cache_len_in", &session->debug);
       } else {
-        const int32_t cache_len_in_host = static_cast<int32_t>(session->cache_len_in);
-        debug_memcpy_async(session->d_cache_last_channel_len, &cache_len_in_host, sizeof(cache_len_in_host),
+        session->host_cache_len_in32 = static_cast<int32_t>(session->cache_len_in);
+        debug_memcpy_async(session->d_cache_last_channel_len, &session->host_cache_len_in32, sizeof(session->host_cache_len_in32),
                            cudaMemcpyHostToDevice, session->stream, "enc:cache_len_in", &session->debug);
       }
       const int cache_len_dbg = g_cache_len_in_dbg_n.fetch_add(1, std::memory_order_relaxed);
@@ -2045,15 +2073,22 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       if (!session->cache_len_pre_logged) {
         int64_t cache_len_out_pre = -1;
         if (cache_len_out_dt == nvinfer1::DataType::kINT64) {
-          debug_memcpy_async(&cache_len_out_pre, session->d_cache_last_channel_len_out, sizeof(cache_len_out_pre),
+          session->host_cache_len_out = -1;
+          debug_memcpy_async(&session->host_cache_len_out, session->d_cache_last_channel_len_out,
+                             sizeof(session->host_cache_len_out),
                              cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out_pre", &session->debug);
         } else if (cache_len_out_dt == nvinfer1::DataType::kINT32) {
-          int32_t cache_len_out_pre32 = -1;
-          debug_memcpy_async(&cache_len_out_pre32, session->d_cache_last_channel_len_out, sizeof(cache_len_out_pre32),
+          session->host_cache_len_out32 = -1;
+          debug_memcpy_async(&session->host_cache_len_out32, session->d_cache_last_channel_len_out,
+                             sizeof(session->host_cache_len_out32),
                              cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out_pre", &session->debug);
-          cache_len_out_pre = static_cast<int64_t>(cache_len_out_pre32);
         }
         cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(cache_len_out_pre)");
+        if (cache_len_out_dt == nvinfer1::DataType::kINT64) {
+          cache_len_out_pre = session->host_cache_len_out;
+        } else if (cache_len_out_dt == nvinfer1::DataType::kINT32) {
+          cache_len_out_pre = static_cast<int64_t>(session->host_cache_len_out32);
+        }
         const int cache_len_out_idx = io_tensor_index(session->enc, cache_len_out_name);
         std::cerr << "[parakeet_trt] cache_last_channel_len_out pre binding=" << cache_len_out_name
                   << " idx=" << cache_len_out_idx
@@ -2087,12 +2122,12 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       session->length_logged = true;
     }
     if (length_dt == nvinfer1::DataType::kINT64) {
-      const int64_t host_len = static_cast<int64_t>(T_valid);
-      debug_memcpy_async(session->d_length, &host_len, sizeof(host_len), cudaMemcpyHostToDevice, session->stream,
+      session->host_length = static_cast<int64_t>(T_valid);
+      debug_memcpy_async(session->d_length, &session->host_length, sizeof(session->host_length), cudaMemcpyHostToDevice, session->stream,
                          "enc:length", &session->debug);
     } else if (length_dt == nvinfer1::DataType::kINT32) {
-      const int32_t host_len = static_cast<int32_t>(T_valid);
-      debug_memcpy_async(session->d_length, &host_len, sizeof(host_len), cudaMemcpyHostToDevice, session->stream,
+      session->host_length32 = static_cast<int32_t>(T_valid);
+      debug_memcpy_async(session->d_length, &session->host_length32, sizeof(session->host_length32), cudaMemcpyHostToDevice, session->stream,
                          "enc:length", &session->debug);
     } else {
       throw std::runtime_error("length dtype must be int32 or int64");
@@ -2233,19 +2268,22 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     }
     int64_t enc_len_host = -1;
     if (enc_len_dt == nvinfer1::DataType::kINT64) {
-      int64_t enc_len_tmp = -1;
-      debug_memcpy_async(&enc_len_tmp, session->d_enc_len, sizeof(enc_len_tmp), cudaMemcpyDeviceToHost, session->stream,
+      session->host_enc_len = -1;
+      debug_memcpy_async(&session->host_enc_len, session->d_enc_len, sizeof(session->host_enc_len), cudaMemcpyDeviceToHost, session->stream,
                          "enc:encoded_lengths", &session->debug);
-      enc_len_host = enc_len_tmp;
     } else if (enc_len_dt == nvinfer1::DataType::kINT32) {
-      int32_t enc_len_tmp = -1;
-      debug_memcpy_async(&enc_len_tmp, session->d_enc_len, sizeof(enc_len_tmp), cudaMemcpyDeviceToHost, session->stream,
+      session->host_enc_len32 = -1;
+      debug_memcpy_async(&session->host_enc_len32, session->d_enc_len, sizeof(session->host_enc_len32), cudaMemcpyDeviceToHost, session->stream,
                          "enc:encoded_lengths", &session->debug);
-      enc_len_host = static_cast<int64_t>(enc_len_tmp);
     } else {
       throw std::runtime_error("encoded_lengths dtype must be int32 or int64");
     }
     cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(encoded_lengths)");
+    if (enc_len_dt == nvinfer1::DataType::kINT64) {
+      enc_len_host = session->host_enc_len;
+    } else if (enc_len_dt == nvinfer1::DataType::kINT32) {
+      enc_len_host = static_cast<int64_t>(session->host_enc_len32);
+    }
     const int32_t T_enc = static_cast<int32_t>(enc_len_host);
     if (session->enc_streaming) {
       if (T_enc != 1) {
@@ -2289,17 +2327,20 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       }
       int64_t cache_len_out_val = -1;
       if (cache_len_dt == nvinfer1::DataType::kINT64) {
-        int64_t cache_len_out_host = -1;
-        debug_memcpy_async(&cache_len_out_host, session->d_cache_last_channel_len_out, sizeof(cache_len_out_host),
+        session->host_cache_len_out = -1;
+        debug_memcpy_async(&session->host_cache_len_out, session->d_cache_last_channel_len_out, sizeof(session->host_cache_len_out),
                            cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out", &session->debug);
-        cache_len_out_val = cache_len_out_host;
       } else {
-        int32_t cache_len_out_host = -1;
-        debug_memcpy_async(&cache_len_out_host, session->d_cache_last_channel_len_out, sizeof(cache_len_out_host),
+        session->host_cache_len_out32 = -1;
+        debug_memcpy_async(&session->host_cache_len_out32, session->d_cache_last_channel_len_out, sizeof(session->host_cache_len_out32),
                            cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out", &session->debug);
-        cache_len_out_val = static_cast<int64_t>(cache_len_out_host);
       }
       cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(cache_len_out)");
+      if (cache_len_dt == nvinfer1::DataType::kINT64) {
+        cache_len_out_val = session->host_cache_len_out;
+      } else if (cache_len_dt == nvinfer1::DataType::kINT32) {
+        cache_len_out_val = static_cast<int64_t>(session->host_cache_len_out32);
+      }
       if (!session->cache_len_logged) {
         const int cache_len_out_idx = io_tensor_index(session->enc, cache_len_out_name);
         std::cerr << "[parakeet_trt] cache_last_channel_len_out binding=" << cache_len_out_name
@@ -3033,8 +3074,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           const size_t c_bytes = volume(session->pred.ctx->getTensorShape("c")) * dtype_size(session->pred.engine->getTensorDataType("c"));
           const size_t g_bytes = volume(session->pred.ctx->getTensorShape("g")) * dtype_size(session->pred.engine->getTensorDataType("g"));
 
-          const int64_t host_y = static_cast<int64_t>(best_tok);
-          debug_memcpy_async(session->d_y, &host_y, sizeof(host_y), cudaMemcpyHostToDevice, session->stream,
+          session->host_y = static_cast<int64_t>(best_tok);
+          debug_memcpy_async(session->d_y, &session->host_y, sizeof(session->host_y), cudaMemcpyHostToDevice, session->stream,
                              "predictor:y", &session->debug);
           debug_stage_marker("pred:pre_enqueue", &session->debug, session->stream, time_idx);
           enqueue_or_throw(session->pred, session->stream, &session->debug);
