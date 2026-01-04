@@ -1977,7 +1977,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     const size_t emitted_start = emitted.size();  // Track tokens emitted before this chunk
     bool did_emit_partial_event = false;
     bool forced_time_advance = false;
-    int last_best_tok = -1;
+    int last_best_head_idx = -1;
+    int last_best_tok_local = -1;
     bool last_best_blank = false;
 
     nvinfer1::DataType joint_enc_dt = session->joint.engine->getTensorDataType("encoder_output");
@@ -2000,11 +2001,13 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         }
       }
     }
-    const int dur_bins = std::max(0, joint_dim - token_logit_size);
+    const int head_dim = std::min(joint_dim, kJointVocabSize);
+    const int dur_bins = std::max(0, head_dim - token_logit_size);
     const bool dur_first = get_env_bool("PARAKEET_JOINT_DUR_FIRST", dur_bins > 0);
     const int tok_offset = dur_first ? dur_bins : 0;
     const int dur_offset = dur_first ? 0 : token_logit_size;
     const int dur_bins_used = (dur_bins > 0) ? std::min(dur_bins, kNumDurations) : kNumDurations;
+    const int token_span = std::max(0, std::min(token_logit_size, head_dim - tok_offset));
     {
       static std::once_flag once;
       std::call_once(once, [&]() {
@@ -2014,10 +2017,17 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   << " dur_first=" << (dur_first ? "1" : "0")
                   << " tok_offset=" << tok_offset
                   << " dur_bins_used=" << dur_bins_used
+                  << " token_span=" << token_span
                   << "\n";
         if (dur_bins > 0 && dur_bins != kNumDurations) {
           std::cerr << "[parakeet_trt] WARN: dur_bins mismatch runtime=" << dur_bins
                     << " expected=" << kNumDurations << "\n";
+        }
+        if (token_span <= 0) {
+          std::cerr << "[parakeet_trt] WARN: token_span=" << token_span
+                    << " tok_offset=" << tok_offset
+                    << " head_dim=" << head_dim
+                    << " token_logit_size=" << token_logit_size << "\n";
         }
       });
     }
@@ -2074,18 +2084,29 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           }
         }
 
-        // Token argmax over [0..kTokenVocabSize)
+        // Token argmax over [0..token_logit_size) slice (dur bins are excluded when dur-first).
         // Apply blank penalty (positive penalizes blank, negative boosts blank).
         const float blank_penalty = get_blank_penalty();
-        if (blank_penalty != 0.0f && kBlankId >= 0 && kBlankId < token_logit_size) {
+        if (blank_penalty != 0.0f && kBlankId >= 0 && kBlankId < token_span) {
           session->host_joint_logits_f32[static_cast<size_t>(tok_offset + kBlankId)] -= blank_penalty;
         }
+        const float* head_logits = session->host_joint_logits_f32.data();
+        int best_head_idx = 0;
+        float best_head_v = head_logits[0];
+        for (int32_t i = 1; i < head_dim; ++i) {
+          const float v = head_logits[static_cast<size_t>(i)];
+          if (v > best_head_v) {
+            best_head_v = v;
+            best_head_idx = i;
+          }
+        }
+
         int best_tok = 0;
-        float best_tok_v = session->host_joint_logits_f32[static_cast<size_t>(tok_offset)];
+        float best_tok_v = head_logits[static_cast<size_t>(tok_offset)];
         int second_tok = -1;
         float second_tok_v = -1.0e9f;
-        for (int32_t i = 1; i < token_logit_size; ++i) {
-          const float v = session->host_joint_logits_f32[static_cast<size_t>(tok_offset + i)];
+        for (int32_t i = 1; i < token_span; ++i) {
+          const float v = head_logits[static_cast<size_t>(tok_offset + i)];
           if (v > best_tok_v) {
             second_tok = best_tok;
             second_tok_v = best_tok_v;
@@ -2103,18 +2124,22 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         if (emitted.empty() && session->tokenizer && session->tokenizer->is_punct_only(best_tok)) {
           suppress_punct = true;
           best_tok = kBlankId;
-          best_tok_v = session->host_joint_logits_f32[static_cast<size_t>(tok_offset + kBlankId)];
+          best_tok_v = head_logits[static_cast<size_t>(tok_offset + kBlankId)];
         }
-        last_best_tok = best_tok;
+        last_best_head_idx = best_head_idx;
+        last_best_tok_local = best_tok;
         last_best_blank = (best_tok == kBlankId);
 
+        const float blank_logit = (kBlankId >= 0 && kBlankId < token_span)
+                                      ? session->host_joint_logits_f32[static_cast<size_t>(tok_offset + kBlankId)]
+                                      : -1.0e9f;
         if (get_debug_topk() && u == 0 &&
             (time_idx == 0 || time_idx == (T_enc / 2) || time_idx + 1 == T_enc)) {
           const int k = 5;
           int top_ids[k] = {0};
           float top_vals[k];
           for (int i = 0; i < k; ++i) top_vals[i] = -1.0e9f;
-          for (int32_t i = 0; i < token_logit_size; ++i) {
+          for (int32_t i = 0; i < token_span; ++i) {
             const float v = session->host_joint_logits_f32[static_cast<size_t>(tok_offset + i)];
             int insert = -1;
             for (int j = 0; j < k; ++j) {
@@ -2145,8 +2170,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
               "Top-k logits (pre-decode)",
               std::string("{\"time_idx\":") + std::to_string(time_idx) +
                   ",\"t_enc\":" + std::to_string(T_enc) +
-                  ",\"blank_logit\":" +
-                  std::to_string(session->host_joint_logits_f32[static_cast<size_t>(tok_offset + kBlankId)]) +
+                  ",\"blank_logit\":" + std::to_string(blank_logit) +
                   ",\"topk\":" + topk + "}");
         }
 
@@ -2181,8 +2205,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   ",\"y_id\":" + std::to_string(y_id) +
                   ",\"best_tok\":" + std::to_string(best_tok) +
                   ",\"best_tok_v\":" + std::to_string(best_tok_v) +
-                  ",\"blank_logit\":" +
-                  std::to_string(session->host_joint_logits_f32[static_cast<size_t>(tok_offset + kBlankId)]) +
+                  ",\"blank_logit\":" + std::to_string(blank_logit) +
                   ",\"second_tok\":" + std::to_string(second_tok) +
                   ",\"second_tok_v\":" + std::to_string(second_tok_v) +
                   ",\"is_blank\":" + std::string(best_tok == kBlankId ? "true" : "false") +
@@ -2300,14 +2323,14 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         std::string tokens_json = "[";
         for (size_t i = dump_start; i < emitted.size(); ++i) {
           const int id = emitted[i];
-          const bool is_small_id = id >= 0 && id < kNumDurations;
+          const bool is_dur_bin_like = id >= 0 && id < dur_bins_used;
           const bool is_blank = (id == kBlankId);
           std::string tok = session->tokenizer ? session->tokenizer->token_at(id) : std::string();
           const bool is_control = is_control_token_str(tok);
           if (i > dump_start) tokens_json += ",";
           tokens_json += std::string("{\"id\":") + std::to_string(id) +
                          ",\"blank\":" + (is_blank ? "true" : "false") +
-                         ",\"small_id\":" + (is_small_id ? "true" : "false") +
+                         ",\"dur_bin_like\":" + (is_dur_bin_like ? "true" : "false") +
                          ",\"control\":" + (is_control ? "true" : "false") +
                          ",\"tok\":\"" + json_escape(tok) + "\"}";
         }
@@ -2317,7 +2340,9 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   << " feature_idx=" << session->debug.feature_idx
                   << " tokens_emitted_this_chunk=" << tokens_emitted_this_chunk
                   << " forced_time_advance=" << (forced_time_advance ? "true" : "false")
-                  << " last_best_tok_id=" << last_best_tok
+                  << " last_best_head_idx=" << last_best_head_idx
+                  << " last_best_tok_local=" << last_best_tok_local
+                  << " tok_offset=" << tok_offset
                   << " dump=" << tokens_json
                   << "\n";
       }
@@ -2332,7 +2357,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
             ",\"tokens_emitted_this_chunk\":" + std::to_string(tokens_emitted_this_chunk) +
             ",\"last_token_id\":" + std::to_string(last_token_id) +
             ",\"best_tok_is_blank\":" + std::string(last_best_blank ? "true" : "false") +
-            ",\"last_best_tok_id\":" + std::to_string(last_best_tok) +
+            ",\"last_best_head_idx\":" + std::to_string(last_best_head_idx) +
+            ",\"last_best_tok_local\":" + std::to_string(last_best_tok_local) +
             ",\"text_len\":" + std::to_string(current_text_len) +
             ",\"did_emit_partial_event\":" + std::string(did_emit_partial_event ? "true" : "false") +
             "}");
