@@ -614,6 +614,7 @@ static std::atomic<int> g_joint_stats_n{0};
 static std::atomic<int> g_joint_in_stats_n{0};
 static std::atomic<int> g_enc_out_stats_n{0};
 static std::atomic<int> g_cache_len_in_dbg_n{0};
+static std::atomic<int> g_enc_in_stats_n{0};
 static bool is_control_token_str(const std::string& tok) {
   if (tok.empty()) return false;
   if (tok == "<blank>" || tok == "<pad>" || tok == "<unk>") return true;
@@ -754,6 +755,7 @@ static size_t volume(const nvinfer1::Dims& d) {
 
 static uint16_t f32_to_fp16(float x);
 static float fp16_to_f32(uint16_t u);
+const char* dtype_name(nvinfer1::DataType dt);
 
 static float max_abs_device(void* ptr,
                             size_t count,
@@ -785,6 +787,69 @@ static float max_abs_device(void* ptr,
     return max_abs;
   }
   throw std::runtime_error("max_abs_device unsupported dtype");
+}
+
+static void log_device_sample_stats(const char* label,
+                                    void* ptr,
+                                    size_t count,
+                                    nvinfer1::DataType dt,
+                                    cudaStream_t stream,
+                                    const DebugContext* ctx) {
+  if (!ptr || count == 0) {
+    std::cerr << "[parakeet_trt] enc_in_stats label=" << label << " count=0\n";
+    return;
+  }
+  const size_t sample_n = std::min<size_t>(count, 1024);
+  size_t nan_ct = 0;
+  size_t inf_ct = 0;
+  size_t finite_ct = 0;
+  float min_v = std::numeric_limits<float>::infinity();
+  float max_v = -std::numeric_limits<float>::infinity();
+  if (dt == nvinfer1::DataType::kHALF) {
+    std::vector<uint16_t> host(sample_n);
+    debug_memcpy_async(host.data(), ptr, sample_n * sizeof(uint16_t), cudaMemcpyDeviceToHost, stream, label, ctx);
+    cuda_check(cudaStreamSynchronize(stream), "cudaStreamSynchronize(enc_in_stats:f16)");
+    for (size_t i = 0; i < host.size(); ++i) {
+      const float v = fp16_to_f32(host[i]);
+      if (std::isnan(v)) {
+        nan_ct++;
+      } else if (std::isinf(v)) {
+        inf_ct++;
+      } else {
+        finite_ct++;
+        if (v < min_v) min_v = v;
+        if (v > max_v) max_v = v;
+      }
+    }
+  } else if (dt == nvinfer1::DataType::kFLOAT) {
+    std::vector<float> host(sample_n);
+    debug_memcpy_async(host.data(), ptr, sample_n * sizeof(float), cudaMemcpyDeviceToHost, stream, label, ctx);
+    cuda_check(cudaStreamSynchronize(stream), "cudaStreamSynchronize(enc_in_stats:f32)");
+    for (size_t i = 0; i < host.size(); ++i) {
+      const float v = host[i];
+      if (std::isnan(v)) {
+        nan_ct++;
+      } else if (std::isinf(v)) {
+        inf_ct++;
+      } else {
+        finite_ct++;
+        if (v < min_v) min_v = v;
+        if (v > max_v) max_v = v;
+      }
+    }
+  } else {
+    std::cerr << "[parakeet_trt] enc_in_stats label=" << label
+              << " unsupported dtype=" << dtype_name(dt) << "\n";
+    return;
+  }
+  std::cerr << "[parakeet_trt] enc_in_stats label=" << label
+            << " sample_n=" << sample_n
+            << " nan_ct=" << nan_ct
+            << " inf_ct=" << inf_ct
+            << " finite_ct=" << finite_ct
+            << " min_v=" << (finite_ct ? min_v : 0.0f)
+            << " max_v=" << (finite_ct ? max_v : 0.0f)
+            << "\n";
 }
 
 // Very small FP32->FP16 conversion (sufficient for inference inputs).
@@ -1640,6 +1705,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       T_shape = std::max<int32_t>(kTrtMinT, T_valid);
     }
 
+    const bool disable_cache = session->enc_streaming && get_env_bool("PARAKEET_DISABLE_CACHE", false);
     // Configure encoder shapes for this chunk.
     set_input_shape_or_throw(session->enc, "audio_signal", {1, kNMels, T_shape});
     set_input_shape_or_throw(session->enc, "length", {1});
@@ -1654,6 +1720,15 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     session->d_enc_out = session->enc.tensors["encoder_output"];
     session->d_enc_len = session->enc.tensors["encoded_lengths"];
     if (session->enc_streaming) {
+      if (disable_cache) {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true)) {
+          std::cerr << "[parakeet_trt] cache disabled via PARAKEET_DISABLE_CACHE=1\n";
+        }
+        session->cache_enabled = false;
+        session->cache_len_in = 0;
+        session->cache_len_in_set = true;
+      }
       if (!session->cache_ptrs_init) {
         session->cache_ch_in_ptr = tensor_ptr_or_throw(session->enc, "cache_last_channel");
         session->cache_tm_in_ptr = tensor_ptr_or_throw(session->enc, "cache_last_time");
@@ -1794,6 +1869,56 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                          cudaMemcpyHostToDevice, session->stream, "enc:audio_f32", &session->debug);
     }
 
+    const int enc_in_dbg = g_enc_in_stats_n.fetch_add(1, std::memory_order_relaxed);
+    if (enc_in_dbg < 6 || (session->enc_streaming && session->cache_len_in != 0 && enc_in_dbg < 30)) {
+      const size_t features_count = static_cast<size_t>(kNMels) * static_cast<size_t>(T_valid);
+      size_t nan_ct = 0;
+      size_t inf_ct = 0;
+      size_t finite_ct = 0;
+      float min_v = std::numeric_limits<float>::infinity();
+      float max_v = -std::numeric_limits<float>::infinity();
+      for (size_t i = 0; i < features_count; ++i) {
+        const float v = features_bct_f32[i];
+        if (std::isnan(v)) {
+          nan_ct++;
+        } else if (std::isinf(v)) {
+          inf_ct++;
+        } else {
+          finite_ct++;
+          if (v < min_v) min_v = v;
+          if (v > max_v) max_v = v;
+        }
+      }
+      std::cerr << "[parakeet_trt] enc_in_stats label=features_host"
+                << " count=" << features_count
+                << " T_valid=" << T_valid
+                << " T_shape=" << T_shape
+                << " nan_ct=" << nan_ct
+                << " inf_ct=" << inf_ct
+                << " finite_ct=" << finite_ct
+                << " min_v=" << (finite_ct ? min_v : 0.0f)
+                << " max_v=" << (finite_ct ? max_v : 0.0f)
+                << "\n";
+      const size_t audio_count = static_cast<size_t>(kNMels) * static_cast<size_t>(T_shape);
+      log_device_sample_stats("enc_audio_in", session->d_audio, audio_count, audio_dt, session->stream, &session->debug);
+      if (session->enc_streaming) {
+        const char* cache_ch_name = resolve_tensor_name(session->enc, "cache_last_channel");
+        const char* cache_tm_name = resolve_tensor_name(session->enc, "cache_last_time");
+        if (cache_ch_name) {
+          const auto cache_ch_shape = session->enc.ctx->getTensorShape(cache_ch_name);
+          const auto cache_ch_dt = session->enc.engine->getTensorDataType(cache_ch_name);
+          log_device_sample_stats("enc_cache_ch_in", session->d_cache_last_channel, volume(cache_ch_shape),
+                                  cache_ch_dt, session->stream, &session->debug);
+        }
+        if (cache_tm_name) {
+          const auto cache_tm_shape = session->enc.ctx->getTensorShape(cache_tm_name);
+          const auto cache_tm_dt = session->enc.engine->getTensorDataType(cache_tm_name);
+          log_device_sample_stats("enc_cache_tm_in", session->d_cache_last_time, volume(cache_tm_shape),
+                                  cache_tm_dt, session->stream, &session->debug);
+        }
+      }
+    }
+
     // Run encoder.
     debug_stage_marker("enc:pre_enqueue", &session->debug, session->stream);
     enqueue_or_throw(session->enc, session->stream, &session->debug);
@@ -1899,63 +2024,67 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         }
       }
 
-      if (cache_len_out_val == 0) {
-        if (session->cache_out_state > 0) {
-          throw std::runtime_error("Streaming contract violated: cache_len_out=0 but cache_out nonzero");
-        }
-        session->cache_enabled = false;
-      } else if (cache_len_out_val == -1) {
-        if (session->cache_out_state <= 0) {
-          throw std::runtime_error("Streaming contract violated: cache_len_out=-1 but cache_out is zero");
-        }
-        if (!session->cache_enabled) {
+      if (!disable_cache) {
+        if (cache_len_out_val == 0) {
+          if (session->cache_out_state > 0) {
+            throw std::runtime_error("Streaming contract violated: cache_len_out=0 but cache_out nonzero");
+          }
+          session->cache_enabled = false;
+        } else if (cache_len_out_val == -1) {
+          if (session->cache_out_state <= 0) {
+            throw std::runtime_error("Streaming contract violated: cache_len_out=-1 but cache_out is zero");
+          }
+          if (!session->cache_enabled) {
+            session->cache_enabled = true;
+            if (!session->cache_len_in_set && session->cache_len_capacity > 0) {
+              session->cache_len_in = session->cache_len_capacity;
+              session->cache_len_in_set = true;
+            }
+            if (!session->cache_enable_logged) {
+              std::cerr << "[parakeet_trt] cache_len_out=-1 sentinel; enabling cache propagation\n";
+              session->cache_enable_logged = true;
+            }
+          }
+        } else if (cache_len_out_val > 0) {
+          if (session->cache_out_state <= 0) {
+            throw std::runtime_error("Streaming contract violated: cache_len_out>0 but cache_out is zero");
+          }
           session->cache_enabled = true;
+        } else {
+          throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out < -1 (value=" +
+                                   std::to_string(cache_len_out_val) + ")");
+        }
+
+        if (cache_len_out_val >= 0) {
+          int64_t next_len = cache_len_out_val;
+          if (session->cache_len_capacity > 0) {
+            if (next_len > session->cache_len_capacity) {
+              static std::atomic<bool> warned{false};
+              if (!warned.exchange(true)) {
+                std::cerr << "[parakeet_trt] WARN: cache_len_out exceeds capacity; clamping "
+                          << next_len << " -> " << session->cache_len_capacity << "\n";
+              }
+              next_len = session->cache_len_capacity;
+            }
+          }
+          session->cache_len_in = next_len;
+          session->cache_len_in_set = true;
+        } else if (cache_len_out_val == -1 && session->cache_out_state > 0) {
           if (!session->cache_len_in_set && session->cache_len_capacity > 0) {
             session->cache_len_in = session->cache_len_capacity;
             session->cache_len_in_set = true;
           }
-          if (!session->cache_enable_logged) {
-            std::cerr << "[parakeet_trt] cache_len_out=-1 sentinel; enabling cache propagation\n";
-            session->cache_enable_logged = true;
+        }
+
+        if (session->cache_enabled) {
+          if (!session->cache_ptrs_init) {
+            throw std::runtime_error("cache propagation enabled but cache pointers not initialized");
           }
+          std::swap(session->cache_ch_in_ptr, session->cache_ch_out_ptr);
+          std::swap(session->cache_tm_in_ptr, session->cache_tm_out_ptr);
         }
-      } else if (cache_len_out_val > 0) {
-        if (session->cache_out_state <= 0) {
-          throw std::runtime_error("Streaming contract violated: cache_len_out>0 but cache_out is zero");
-        }
-        session->cache_enabled = true;
       } else {
-        throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out < -1 (value=" +
-                                 std::to_string(cache_len_out_val) + ")");
-      }
-
-      if (cache_len_out_val >= 0) {
-        int64_t next_len = cache_len_out_val;
-        if (session->cache_len_capacity > 0) {
-          if (next_len > session->cache_len_capacity) {
-            static std::atomic<bool> warned{false};
-            if (!warned.exchange(true)) {
-              std::cerr << "[parakeet_trt] WARN: cache_len_out exceeds capacity; clamping "
-                        << next_len << " -> " << session->cache_len_capacity << "\n";
-            }
-            next_len = session->cache_len_capacity;
-          }
-        }
-        session->cache_len_in = next_len;
-        session->cache_len_in_set = true;
-      } else if (cache_len_out_val == -1 && session->cache_out_state > 0) {
-        if (!session->cache_len_in_set && session->cache_len_capacity > 0) {
-          session->cache_len_in = session->cache_len_capacity;
-          session->cache_len_in_set = true;
-        }
-      }
-
-      if (session->cache_enabled) {
-        if (!session->cache_ptrs_init) {
-          throw std::runtime_error("cache propagation enabled but cache pointers not initialized");
-        }
-        std::swap(session->cache_ch_in_ptr, session->cache_ch_out_ptr);
-        std::swap(session->cache_tm_in_ptr, session->cache_tm_out_ptr);
+        session->cache_enabled = false;
       }
     }
 
