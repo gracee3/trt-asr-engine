@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <unordered_set>
 #include <atomic>
 #include <stdexcept>
 #include <string>
@@ -758,14 +759,76 @@ struct TrtEngine {
   bool debug_sync_utt_seq_set = false;
 };
 
+static int io_tensor_index(const TrtEngine& e, const char* name) {
+  const int nb = e.engine->getNbIOTensors();
+  for (int i = 0; i < nb; ++i) {
+    const char* tn = e.engine->getIOTensorName(i);
+    if (tn && std::strcmp(tn, name) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 static const char* resolve_tensor_name(const TrtEngine& e, const char* name) {
   const int nb = e.engine->getNbIOTensors();
   const size_t name_len = std::strlen(name);
+  const char* exact_match = nullptr;
+  const char* suffix_match = nullptr;
   for (int i = 0; i < nb; ++i) {
     const char* tn = e.engine->getIOTensorName(i);
     if (!tn) continue;
-    if (std::strcmp(tn, name) == 0) return tn;
-    if (std::strncmp(tn, name, name_len) == 0 && tn[name_len] == '.') return tn;
+    if (std::strcmp(tn, name) == 0) {
+      exact_match = tn;
+      break;
+    }
+  }
+  if (exact_match) {
+    static std::mutex mu;
+    static std::unordered_set<std::string> seen;
+    const std::string key = e.name + ":" + name;
+    std::lock_guard<std::mutex> lock(mu);
+    if (seen.insert(key).second) {
+      const int idx = io_tensor_index(e, exact_match);
+      std::cerr << "[parakeet_trt] resolved tensor name engine=" << e.name
+                << " requested=" << name << " resolved=" << exact_match
+                << " idx=" << idx << "\n";
+    }
+    return exact_match;
+  }
+  for (int i = 0; i < nb; ++i) {
+    const char* tn = e.engine->getIOTensorName(i);
+    if (!tn) continue;
+    if (std::strncmp(tn, name, name_len) == 0 && tn[name_len] == '.') {
+      const char* suffix = tn + name_len + 1;
+      if (!suffix || !*suffix) continue;
+      bool digits_only = true;
+      for (const char* p = suffix; *p; ++p) {
+        if (!std::isdigit(static_cast<unsigned char>(*p))) {
+          digits_only = false;
+          break;
+        }
+      }
+      if (!digits_only) continue;
+      if (suffix_match && std::strcmp(suffix_match, tn) != 0) {
+        throw std::runtime_error(std::string("Ambiguous tensor binding for ") + name +
+                                 " (multiple suffix matches)");
+      }
+      suffix_match = tn;
+    }
+  }
+  if (suffix_match) {
+    static std::mutex mu;
+    static std::unordered_set<std::string> seen;
+    const std::string key = e.name + ":" + name;
+    std::lock_guard<std::mutex> lock(mu);
+    if (seen.insert(key).second) {
+      const int idx = io_tensor_index(e, suffix_match);
+      std::cerr << "[parakeet_trt] resolved tensor name engine=" << e.name
+                << " requested=" << name << " resolved=" << suffix_match
+                << " idx=" << idx << "\n";
+    }
+    return suffix_match;
   }
   return nullptr;
 }
@@ -1481,12 +1544,17 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       session->d_cache_last_time_out = cache_tm_out;
       session->d_cache_last_channel_len_out = cache_len_out;
       if (!session->enc_cache_zeroed) {
-        const auto cache_ch_shape = session->enc.ctx->getTensorShape("cache_last_channel");
-        const auto cache_tm_shape = session->enc.ctx->getTensorShape("cache_last_time");
+        const char* cache_ch_name = resolve_tensor_name(session->enc, "cache_last_channel");
+        const char* cache_tm_name = resolve_tensor_name(session->enc, "cache_last_time");
+        if (!cache_ch_name || !cache_tm_name) {
+          throw std::runtime_error("Missing cache tensor binding");
+        }
+        const auto cache_ch_shape = session->enc.ctx->getTensorShape(cache_ch_name);
+        const auto cache_tm_shape = session->enc.ctx->getTensorShape(cache_tm_name);
         const size_t cache_ch_bytes =
-            volume(cache_ch_shape) * dtype_size(session->enc.engine->getTensorDataType("cache_last_channel"));
+            volume(cache_ch_shape) * dtype_size(session->enc.engine->getTensorDataType(cache_ch_name));
         const size_t cache_tm_bytes =
-            volume(cache_tm_shape) * dtype_size(session->enc.engine->getTensorDataType("cache_last_time"));
+            volume(cache_tm_shape) * dtype_size(session->enc.engine->getTensorDataType(cache_tm_name));
         debug_memset_async(session->d_cache_last_channel, 0, cache_ch_bytes, session->stream,
                            "enc:cache_last_channel_zero", &session->debug);
         debug_memset_async(session->d_cache_last_time, 0, cache_tm_bytes, session->stream,
@@ -1496,6 +1564,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       const int64_t cache_len_zero = 0;
       debug_memcpy_async(session->d_cache_last_channel_len, &cache_len_zero, sizeof(cache_len_zero),
                          cudaMemcpyHostToDevice, session->stream, "enc:cache_len_in", &session->debug);
+      debug_memset_async(session->d_cache_last_channel_len_out, 0, sizeof(int64_t), session->stream,
+                         "enc:cache_len_out_zero", &session->debug);
     }
 
     // Host -> device: length
@@ -1564,7 +1634,11 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     // #endregion
 
     if (session->enc_streaming) {
-      const auto cache_len_dt = session->enc.engine->getTensorDataType("cache_last_channel_len_out");
+      const char* cache_len_out_name = resolve_tensor_name(session->enc, "cache_last_channel_len_out");
+      if (!cache_len_out_name) {
+        throw std::runtime_error("Missing tensor binding: cache_last_channel_len_out");
+      }
+      const auto cache_len_dt = session->enc.engine->getTensorDataType(cache_len_out_name);
       if (cache_len_dt != nvinfer1::DataType::kINT64) {
         throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out dtype != int64");
       }
@@ -1572,12 +1646,22 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       debug_memcpy_async(&cache_len_out_host, session->d_cache_last_channel_len_out, sizeof(cache_len_out_host),
                          cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out", &session->debug);
       cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(cache_len_out)");
-      if (cache_len_out_host != 0) {
-        static std::atomic<bool> warned{false};
-        if (!warned.exchange(true)) {
-          std::cerr << "[parakeet_trt] WARN: cache_last_channel_len_out != 0 (value="
-                    << cache_len_out_host << ")\n";
-        }
+      static std::atomic<bool> cache_len_logged{false};
+      if (!cache_len_logged.exchange(true)) {
+        const int cache_len_out_idx = io_tensor_index(session->enc, cache_len_out_name);
+        std::cerr << "[parakeet_trt] cache_last_channel_len_out binding=" << cache_len_out_name
+                  << " idx=" << cache_len_out_idx
+                  << " dtype=" << dtype_name(cache_len_dt)
+                  << " bytes=" << sizeof(cache_len_out_host)
+                  << " value=" << cache_len_out_host << "\n";
+      }
+      if (cache_len_out_host < 0) {
+        throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out < 0 (value=" +
+                                 std::to_string(cache_len_out_host) + ")");
+      }
+      if (cache_len_out_host > 0) {
+        throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out > 0 (value=" +
+                                 std::to_string(cache_len_out_host) + ")");
       }
     }
 
