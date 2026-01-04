@@ -616,6 +616,7 @@ static std::atomic<int> g_joint_in_stats_n{0};
 static std::atomic<int> g_enc_out_stats_n{0};
 static std::atomic<int> g_cache_len_in_dbg_n{0};
 static std::atomic<int> g_enc_in_stats_n{0};
+static std::atomic<int> g_emit_dbg_n{0};
 static bool is_control_token_str(const std::string& tok) {
   if (tok.empty()) return false;
   if (tok == "<blank>" || tok == "<pad>" || tok == "<unk>") return true;
@@ -1496,6 +1497,8 @@ struct ParakeetSession {
   bool cache_len_logged = false;
   bool cache_out_logged = false;
   bool cache_enable_logged = false;
+  bool length_logged = false;
+  bool enc_len_logged = false;
   int cache_out_state = -1;  // -1 unknown, 0 zero, 1 nonzero
   int64_t cache_len_in = 0;
   int64_t cache_len_capacity = 0;
@@ -1645,6 +1648,25 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
             ",\"tok_nopnc\":" + std::to_string(session->tok_nopnc) +
             ",\"tok_noitn\":" + std::to_string(session->tok_noitn) + "}");
     // #endregion
+    if (session->tokenizer) {
+      const int vocab_size = session->tokenizer->vocab_size();
+      const int last_id = vocab_size > 0 ? vocab_size - 1 : 0;
+      auto tok = [&](int id) -> std::string { return json_escape(session->tokenizer->token_at(id)); };
+      std::cerr << "[parakeet_trt] vocab_size=" << vocab_size
+                << " tok0=\"" << tok(0) << "\""
+                << " tok1=\"" << tok(1) << "\""
+                << " tok_start=" << session->tok_start
+                << " tok_lang=" << session->tok_lang
+                << " tok_nopnc=" << session->tok_nopnc
+                << " tok_noitn=" << session->tok_noitn
+                << " tok_blank_id=" << kBlankId
+                << " tok_blank=\"" << tok(kBlankId) << "\""
+                << " tok_8191=\"" << tok(kBlankId - 1) << "\""
+                << " tok_8189=\"" << tok(kBlankId - 3) << "\""
+                << " tok_last_id=" << last_id
+                << " tok_last=\"" << tok(last_id) << "\""
+                << "\n";
+    }
 
     // Configure predictor fixed shapes (U=1).
     set_input_shape_or_throw(session->pred, "y", {1, 1});
@@ -2044,9 +2066,37 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     }
 
     // Host -> device: length
-    const int64_t host_len = static_cast<int64_t>(T_valid);
-    debug_memcpy_async(session->d_length, &host_len, sizeof(host_len), cudaMemcpyHostToDevice, session->stream,
-                       "enc:length", &session->debug);
+    const char* length_name = resolve_tensor_name(session->enc, "length");
+    if (!length_name) {
+      throw std::runtime_error("Missing tensor binding: length");
+    }
+    const auto length_dt = session->enc.engine->getTensorDataType(length_name);
+    const auto length_shape = session->enc.ctx->getTensorShape(length_name);
+    const size_t length_bytes = volume(length_shape) * dtype_size(length_dt);
+    if (length_bytes == 0) {
+      throw std::runtime_error("length has zero-sized shape (shape=" + dims_to_string(length_shape) + ")");
+    }
+    if (!session->length_logged) {
+      const int length_idx = io_tensor_index(session->enc, length_name);
+      std::cerr << "[parakeet_trt] length binding=" << length_name
+                << " idx=" << length_idx
+                << " dtype=" << dtype_name(length_dt)
+                << " dims=" << dims_to_string(length_shape)
+                << " bytes=" << length_bytes
+                << "\n";
+      session->length_logged = true;
+    }
+    if (length_dt == nvinfer1::DataType::kINT64) {
+      const int64_t host_len = static_cast<int64_t>(T_valid);
+      debug_memcpy_async(session->d_length, &host_len, sizeof(host_len), cudaMemcpyHostToDevice, session->stream,
+                         "enc:length", &session->debug);
+    } else if (length_dt == nvinfer1::DataType::kINT32) {
+      const int32_t host_len = static_cast<int32_t>(T_valid);
+      debug_memcpy_async(session->d_length, &host_len, sizeof(host_len), cudaMemcpyHostToDevice, session->stream,
+                         "enc:length", &session->debug);
+    } else {
+      throw std::runtime_error("length dtype must be int32 or int64");
+    }
 
     // Host -> device: audio features.
     nvinfer1::DataType audio_dt = session->enc.engine->getTensorDataType("audio_signal");
@@ -2161,9 +2211,40 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     }
 
     // Read encoded length.
-    int64_t enc_len_host = 0;
-    debug_memcpy_async(&enc_len_host, session->d_enc_len, sizeof(enc_len_host), cudaMemcpyDeviceToHost, session->stream,
-                       "enc:encoded_lengths", &session->debug);
+    const char* enc_len_name = resolve_tensor_name(session->enc, "encoded_lengths");
+    if (!enc_len_name) {
+      throw std::runtime_error("Missing tensor binding: encoded_lengths");
+    }
+    const auto enc_len_dt = session->enc.engine->getTensorDataType(enc_len_name);
+    const auto enc_len_shape = session->enc.ctx->getTensorShape(enc_len_name);
+    const size_t enc_len_bytes = volume(enc_len_shape) * dtype_size(enc_len_dt);
+    if (enc_len_bytes == 0) {
+      throw std::runtime_error("encoded_lengths has zero-sized shape (shape=" + dims_to_string(enc_len_shape) + ")");
+    }
+    if (!session->enc_len_logged) {
+      const int enc_len_idx = io_tensor_index(session->enc, enc_len_name);
+      std::cerr << "[parakeet_trt] encoded_lengths binding=" << enc_len_name
+                << " idx=" << enc_len_idx
+                << " dtype=" << dtype_name(enc_len_dt)
+                << " dims=" << dims_to_string(enc_len_shape)
+                << " bytes=" << enc_len_bytes
+                << "\n";
+      session->enc_len_logged = true;
+    }
+    int64_t enc_len_host = -1;
+    if (enc_len_dt == nvinfer1::DataType::kINT64) {
+      int64_t enc_len_tmp = -1;
+      debug_memcpy_async(&enc_len_tmp, session->d_enc_len, sizeof(enc_len_tmp), cudaMemcpyDeviceToHost, session->stream,
+                         "enc:encoded_lengths", &session->debug);
+      enc_len_host = enc_len_tmp;
+    } else if (enc_len_dt == nvinfer1::DataType::kINT32) {
+      int32_t enc_len_tmp = -1;
+      debug_memcpy_async(&enc_len_tmp, session->d_enc_len, sizeof(enc_len_tmp), cudaMemcpyDeviceToHost, session->stream,
+                         "enc:encoded_lengths", &session->debug);
+      enc_len_host = static_cast<int64_t>(enc_len_tmp);
+    } else {
+      throw std::runtime_error("encoded_lengths dtype must be int32 or int64");
+    }
     cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(encoded_lengths)");
     const int32_t T_enc = static_cast<int32_t>(enc_len_host);
     if (session->enc_streaming) {
@@ -2424,6 +2505,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     const int dur_bins_used = (dur_bins > 0) ? std::min(dur_bins, kNumDurations) : kNumDurations;
     const int token_span = std::max(0, std::min(token_logit_size, head_dim - tok_offset));
     const bool blank_scan = get_env_bool("PARAKEET_DEBUG_BLANK_SCAN", false);
+    const bool debug_emit_tokens = get_env_bool("PARAKEET_DEBUG_EMIT_TOKENS", false);
+    const bool disable_punct_suppression = get_env_bool("PARAKEET_DISABLE_PUNCT_SUPPRESSION", false);
     const bool blank_in_range = (kBlankId >= 0 && kBlankId < token_span);
     size_t blank_scan_steps = 0;
     size_t blank_scan_blank_pref = 0;
@@ -2431,6 +2514,11 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     double blank_margin_sum = 0.0;
     double blank_margin_min = std::numeric_limits<double>::infinity();
     double blank_margin_max = -std::numeric_limits<double>::infinity();
+    size_t emit_token_ct = 0;
+    size_t emit_control_ct = 0;
+    size_t emit_unk_ct = 0;
+    size_t emit_empty_ct = 0;
+    size_t emit_punct_ct = 0;
     {
       static std::once_flag once;
       std::call_once(once, [&]() {
@@ -2799,7 +2887,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
         bool suppress_punct = false;
         // Suppress leading punctuation-only emission; it can poison y_id and stall decoding on some utterances.
-        if (emitted.empty() && session->tokenizer && session->tokenizer->is_punct_only(best_tok)) {
+        if (!disable_punct_suppression && emitted.empty() && session->tokenizer && session->tokenizer->is_punct_only(best_tok)) {
           suppress_punct = true;
           best_tok = kBlankId;
           best_tok_v = head_logits[static_cast<size_t>(tok_offset + kBlankId)];
@@ -2911,6 +2999,34 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         // #endregion
 
         if (best_tok != kBlankId) {
+          if (debug_emit_tokens) {
+            emit_token_ct++;
+            if (session->tokenizer) {
+              const std::string& piece = session->tokenizer->token_at(best_tok);
+              const bool is_control = is_control_token_str(piece);
+              const bool is_unk = (piece == "<unk>");
+              const bool is_empty = piece.empty();
+              const bool is_punct = session->tokenizer->is_punct_only(best_tok);
+              if (is_control) emit_control_ct++;
+              if (is_unk) emit_unk_ct++;
+              if (is_empty) emit_empty_ct++;
+              if (is_punct) emit_punct_ct++;
+              const int emit_dbg = g_emit_dbg_n.fetch_add(1, std::memory_order_relaxed);
+              if (emit_dbg < 64) {
+                std::cerr << "[parakeet_trt] emit_token id=" << best_tok
+                          << " piece=\"" << json_escape(piece) << "\""
+                          << " control=" << (is_control ? "1" : "0")
+                          << " unk=" << (is_unk ? "1" : "0")
+                          << " empty=" << (is_empty ? "1" : "0")
+                          << " punct=" << (is_punct ? "1" : "0")
+                          << " time_idx=" << time_idx
+                          << " u=" << u
+                          << " chunk_idx=" << session->debug.audio_chunk_idx
+                          << " feature_idx=" << session->debug.feature_idx
+                          << "\n";
+              }
+            }
+          }
           emitted.push_back(best_tok);
           // Predictor update (ONLY on non-blank token): y=best_tok, update h/c and refresh cached `g`.
           const size_t h_bytes = volume(session->pred.ctx->getTensorShape("h")) * dtype_size(session->pred.engine->getTensorDataType("h"));
@@ -3023,6 +3139,18 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     if (session->tokenizer) {
       const std::string decoded = session->tokenizer->decode(emitted);
       current_text_len = static_cast<int>(decoded.size());
+    }
+    if (debug_emit_tokens) {
+      std::cerr << "[parakeet_trt] emit_summary tokens=" << emit_token_ct
+                << " control=" << emit_control_ct
+                << " unk=" << emit_unk_ct
+                << " empty_piece=" << emit_empty_ct
+                << " punct=" << emit_punct_ct
+                << " tokens_emitted_this_chunk=" << tokens_emitted_this_chunk
+                << " text_len=" << current_text_len
+                << " chunk_idx=" << session->debug.audio_chunk_idx
+                << " feature_idx=" << session->debug.feature_idx
+                << "\n";
     }
     if ((tokens_emitted_this_chunk > 0 || forced_time_advance) && current_text_len == 0) {
       const int dump_n = g_empty_text_dump_n.fetch_add(1, std::memory_order_relaxed);

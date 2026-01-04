@@ -162,6 +162,8 @@ PARAKEET_NAN_GUARD_HALT=1   # Abort on first NaN/Inf
 
 # Decoder debug
 PARAKEET_DEBUG_BLANK_SCAN=1 # Log blank-vs-nonblank margin summary per chunk
+PARAKEET_DEBUG_EMIT_TOKENS=1 # Log emitted token ids/pieces and per-chunk token summary
+PARAKEET_DISABLE_PUNCT_SUPPRESSION=1 # Disable leading punctuation suppression
 PARAKEET_Y0_OVERRIDE=N      # Override initial predictor token (skip prompt priming)
 
 # Cache debugging
