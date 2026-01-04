@@ -464,6 +464,7 @@ static void debug_memcpy_async(void* dst,
   }
 
   if (err != cudaSuccess) {
+    cudaGetLastError();
     throw std::runtime_error(std::string(label ? label : "cudaMemcpyAsync") + ": " +
                              cudaGetErrorString(err));
   }
@@ -517,6 +518,7 @@ static void debug_memset_async(void* ptr,
   }
 
   if (err != cudaSuccess) {
+    cudaGetLastError();
     throw std::runtime_error(std::string(label ? label : "cudaMemsetAsync") + ": " +
                              cudaGetErrorString(err));
   }
@@ -974,6 +976,22 @@ static void set_input_shape_or_throw(TrtEngine& e, const char* name, const std::
 #endif
 }
 
+static void set_tensor_address_or_throw(TrtEngine& e, const char* name, void* ptr) {
+  const char* resolved = resolve_tensor_name(e, name);
+  if (!resolved) {
+    throw std::runtime_error(std::string("Missing binding: ") + name);
+  }
+#if NV_TENSORRT_MAJOR >= 10
+  if (!e.ctx->setTensorAddress(resolved, ptr)) {
+    throw std::runtime_error(std::string("setTensorAddress failed for ") + resolved);
+  }
+#else
+  (void)ptr;
+  throw std::runtime_error("TensorRT < 10 not supported by this demo runtime");
+#endif
+  e.tensors[resolved] = ptr;
+}
+
 static void allocate_buffers_for_current_shapes(TrtEngine& e, cudaStream_t stream) {
 #if NV_TENSORRT_MAJOR >= 10
   const int nb = e.engine->getNbIOTensors();
@@ -1314,6 +1332,11 @@ struct ParakeetSession {
   void* d_cache_last_channel_out = nullptr;
   void* d_cache_last_time_out = nullptr;
   void* d_cache_last_channel_len_out = nullptr;
+  void* cache_ch_in_ptr = nullptr;
+  void* cache_ch_out_ptr = nullptr;
+  void* cache_tm_in_ptr = nullptr;
+  void* cache_tm_out_ptr = nullptr;
+  bool cache_ptrs_init = false;
 
   // Event plumbing.
   std::queue<ParakeetEventInternal> event_queue;
@@ -1478,6 +1501,11 @@ void parakeet_reset_utterance(ParakeetSession* session) {
   session->cache_len_in_set = false;
   session->cache_len_in = 0;
   session->cache_out_state = -1;
+  session->cache_ptrs_init = false;
+  session->cache_ch_in_ptr = nullptr;
+  session->cache_ch_out_ptr = nullptr;
+  session->cache_tm_in_ptr = nullptr;
+  session->cache_tm_out_ptr = nullptr;
 
   // Prime predictor with NeMo-style prompt tokens once per utterance.
   // This seeds h/c and initializes y_id so decoding can continue across push_features calls.
@@ -1580,22 +1608,24 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     session->d_enc_out = session->enc.tensors["encoder_output"];
     session->d_enc_len = session->enc.tensors["encoded_lengths"];
     if (session->enc_streaming) {
-      void* cache_ch = tensor_ptr_or_throw(session->enc, "cache_last_channel");
-      void* cache_tm = tensor_ptr_or_throw(session->enc, "cache_last_time");
-      void* cache_len = tensor_ptr_or_throw(session->enc, "cache_last_channel_len");
-      void* cache_ch_out = tensor_ptr_or_throw(session->enc, "cache_last_channel_out");
-      void* cache_tm_out = tensor_ptr_or_throw(session->enc, "cache_last_time_out");
-      void* cache_len_out = tensor_ptr_or_throw(session->enc, "cache_last_channel_len_out");
-      if (session->d_cache_last_channel != cache_ch || session->d_cache_last_time != cache_tm ||
-          session->d_cache_last_channel_len != cache_len) {
+      if (!session->cache_ptrs_init) {
+        session->cache_ch_in_ptr = tensor_ptr_or_throw(session->enc, "cache_last_channel");
+        session->cache_tm_in_ptr = tensor_ptr_or_throw(session->enc, "cache_last_time");
+        session->cache_ch_out_ptr = tensor_ptr_or_throw(session->enc, "cache_last_channel_out");
+        session->cache_tm_out_ptr = tensor_ptr_or_throw(session->enc, "cache_last_time_out");
+        session->cache_ptrs_init = true;
         session->enc_cache_zeroed = false;
       }
-      session->d_cache_last_channel = cache_ch;
-      session->d_cache_last_time = cache_tm;
-      session->d_cache_last_channel_len = cache_len;
-      session->d_cache_last_channel_out = cache_ch_out;
-      session->d_cache_last_time_out = cache_tm_out;
-      session->d_cache_last_channel_len_out = cache_len_out;
+      set_tensor_address_or_throw(session->enc, "cache_last_channel", session->cache_ch_in_ptr);
+      set_tensor_address_or_throw(session->enc, "cache_last_time", session->cache_tm_in_ptr);
+      set_tensor_address_or_throw(session->enc, "cache_last_channel_out", session->cache_ch_out_ptr);
+      set_tensor_address_or_throw(session->enc, "cache_last_time_out", session->cache_tm_out_ptr);
+      session->d_cache_last_channel = session->cache_ch_in_ptr;
+      session->d_cache_last_time = session->cache_tm_in_ptr;
+      session->d_cache_last_channel_out = session->cache_ch_out_ptr;
+      session->d_cache_last_time_out = session->cache_tm_out_ptr;
+      session->d_cache_last_channel_len = tensor_ptr_or_throw(session->enc, "cache_last_channel_len");
+      session->d_cache_last_channel_len_out = tensor_ptr_or_throw(session->enc, "cache_last_channel_len_out");
       if (!session->enc_cache_zeroed) {
         const char* cache_ch_name = resolve_tensor_name(session->enc, "cache_last_channel");
         const char* cache_tm_name = resolve_tensor_name(session->enc, "cache_last_time");
@@ -1815,6 +1845,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         if (session->cache_out_state > 0) {
           throw std::runtime_error("Streaming contract violated: cache_len_out=0 but cache_out nonzero");
         }
+        session->cache_enabled = false;
       } else if (cache_len_out_val == -1) {
         if (session->cache_out_state <= 0) {
           throw std::runtime_error("Streaming contract violated: cache_len_out=-1 but cache_out is zero");
@@ -1831,20 +1862,42 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           }
         }
       } else if (cache_len_out_val > 0) {
-        throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out > 0 (value=" +
-                                 std::to_string(cache_len_out_val) + ")");
+        if (session->cache_out_state <= 0) {
+          throw std::runtime_error("Streaming contract violated: cache_len_out>0 but cache_out is zero");
+        }
+        session->cache_enabled = true;
       } else {
         throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out < -1 (value=" +
                                  std::to_string(cache_len_out_val) + ")");
       }
-      if (session->cache_enabled) {
-        if (session->cache_ch_bytes == 0 || session->cache_tm_bytes == 0) {
-          throw std::runtime_error("cache propagation enabled but cache buffer sizes are zero");
+
+      if (cache_len_out_val >= 0) {
+        int64_t next_len = cache_len_out_val;
+        if (session->cache_len_capacity > 0) {
+          if (next_len > session->cache_len_capacity) {
+            static std::atomic<bool> warned{false};
+            if (!warned.exchange(true)) {
+              std::cerr << "[parakeet_trt] WARN: cache_len_out exceeds capacity; clamping "
+                        << next_len << " -> " << session->cache_len_capacity << "\n";
+            }
+            next_len = session->cache_len_capacity;
+          }
         }
-        debug_memcpy_async(session->d_cache_last_channel, session->d_cache_last_channel_out, session->cache_ch_bytes,
-                           cudaMemcpyDeviceToDevice, session->stream, "enc:cache_ch_d2d", &session->debug);
-        debug_memcpy_async(session->d_cache_last_time, session->d_cache_last_time_out, session->cache_tm_bytes,
-                           cudaMemcpyDeviceToDevice, session->stream, "enc:cache_tm_d2d", &session->debug);
+        session->cache_len_in = next_len;
+        session->cache_len_in_set = true;
+      } else if (cache_len_out_val == -1 && session->cache_out_state > 0) {
+        if (!session->cache_len_in_set && session->cache_len_capacity > 0) {
+          session->cache_len_in = session->cache_len_capacity;
+          session->cache_len_in_set = true;
+        }
+      }
+
+      if (session->cache_enabled) {
+        if (!session->cache_ptrs_init) {
+          throw std::runtime_error("cache propagation enabled but cache pointers not initialized");
+        }
+        std::swap(session->cache_ch_in_ptr, session->cache_ch_out_ptr);
+        std::swap(session->cache_tm_in_ptr, session->cache_tm_out_ptr);
       }
     }
 
