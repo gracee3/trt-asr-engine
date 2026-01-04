@@ -607,6 +607,40 @@ static Logger gLogger;
 
 // #region agent log
 static std::atomic<int> g_dbg_n{0};
+static std::string json_escape(const std::string& s) {
+  std::string out;
+  out.reserve(s.size() + 8);
+  for (char c : s) {
+    switch (c) {
+      case '\"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
+      default:
+        if (static_cast<unsigned char>(c) < 0x20) {
+          std::ostringstream oss;
+          oss << "\\u" << std::hex << std::setw(4) << std::setfill('0')
+              << static_cast<int>(static_cast<unsigned char>(c));
+          out += oss.str();
+        } else {
+          out += c;
+        }
+        break;
+    }
+  }
+  return out;
+}
 static void dbglog_ndjson(const char* hypothesisId,
                           const char* location,
                           const char* message,
@@ -1935,6 +1969,9 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     // Local emitted is still used for the final event of this chunk.
     std::vector<int>& emitted = session->accumulated_tokens;
     const size_t emitted_start = emitted.size();  // Track tokens emitted before this chunk
+    bool did_emit_partial_event = false;
+    int last_best_tok = -1;
+    bool last_best_blank = false;
 
     nvinfer1::DataType joint_enc_dt = session->joint.engine->getTensorDataType("encoder_output");
     std::vector<float> host_joint_enc_slice_f32(static_cast<size_t>(kEncDim) * static_cast<size_t>(kTrtChunkT));
@@ -2026,6 +2063,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           best_tok = kBlankId;
           best_tok_v = session->host_joint_logits_f32[static_cast<size_t>(kBlankId)];
         }
+        last_best_tok = best_tok;
+        last_best_blank = (best_tok == kBlankId);
 
         if (get_debug_topk() && u == 0 &&
             (time_idx == 0 || time_idx == (T_enc / 2) || time_idx + 1 == T_enc)) {
@@ -2166,15 +2205,57 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           ParakeetEventInternal pev{};
           pev.type = PARAKEET_EVENT_PARTIAL_TEXT;
           pev.segment_id = 0;
-          pev.text = session->tokenizer->decode(emitted);
+          const std::string partial_text = session->tokenizer ? session->tokenizer->decode(emitted) : std::string();
+          pev.text = partial_text;
           {
             std::lock_guard<std::mutex> lock(session->event_mutex);
             session->event_queue.push(std::move(pev));
           }
+          const size_t preview_len = 48;
+          const std::string preview = partial_text.substr(0, preview_len);
+          const uint64_t t_ms = static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now().time_since_epoch())
+                  .count());
+          dbglog_ndjson(
+              "H21",
+              "cpp/src/parakeet_trt.cpp:parakeet_push_features:partial_emit",
+              "Partial event queued",
+              std::string("{\"utt_seq\":") + std::to_string(session->debug.utt_seq) +
+                  ",\"audio_chunk_idx\":" + std::to_string(session->debug.audio_chunk_idx) +
+                  ",\"feature_idx\":" + std::to_string(session->debug.feature_idx) +
+                  ",\"t_ms\":" + std::to_string(t_ms) +
+                  ",\"text_preview\":\"" + json_escape(preview) + "\"" +
+                  ",\"text_len\":" + std::to_string(partial_text.size()) +
+                  ",\"stable_prefix_len\":-1}");
+          did_emit_partial_event = true;
         }
         session->last_partial_emit = std::chrono::steady_clock::now();
       }
     }
+
+    const size_t tokens_emitted_this_chunk = emitted.size() - emitted_start;
+    int last_token_id = -1;
+    if (!emitted.empty()) last_token_id = emitted.back();
+    int current_text_len = 0;
+    if (session->tokenizer) {
+      const std::string decoded = session->tokenizer->decode(emitted);
+      current_text_len = static_cast<int>(decoded.size());
+    }
+    dbglog_ndjson(
+        "H22",
+        "cpp/src/parakeet_trt.cpp:parakeet_push_features:chunk_summary",
+        "Decode chunk summary",
+        std::string("{\"utt_seq\":") + std::to_string(session->debug.utt_seq) +
+            ",\"audio_chunk_idx\":" + std::to_string(session->debug.audio_chunk_idx) +
+            ",\"feature_idx\":" + std::to_string(session->debug.feature_idx) +
+            ",\"tokens_emitted_this_chunk\":" + std::to_string(tokens_emitted_this_chunk) +
+            ",\"last_token_id\":" + std::to_string(last_token_id) +
+            ",\"best_tok_is_blank\":" + std::string(last_best_blank ? "true" : "false") +
+            ",\"last_best_tok_id\":" + std::to_string(last_best_tok) +
+            ",\"text_len\":" + std::to_string(current_text_len) +
+            ",\"did_emit_partial_event\":" + std::string(did_emit_partial_event ? "true" : "false") +
+            "}");
 
     // Emit final transcript event for this chunk.
     // Only emit the tokens added during this chunk (delta from emitted_start).
