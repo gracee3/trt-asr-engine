@@ -163,11 +163,15 @@ PARAKEET_NAN_GUARD_HALT=1   # Abort on first NaN/Inf
 # Decoder debug
 PARAKEET_DEBUG_BLANK_SCAN=1 # Log blank-vs-nonblank margin summary per chunk
 PARAKEET_DEBUG_EMIT_TOKENS=1 # Log emitted token ids/pieces and per-chunk token summary
+PARAKEET_DEBUG_JOINT_TOPK=1 # Log top-k over the full joint output vector
 PARAKEET_DISABLE_PUNCT_SUPPRESSION=1 # Disable leading punctuation suppression
+PARAKEET_JOINT_DUR_FIRST=0  # Force token-first joint layout (set to 1 for duration-first)
 PARAKEET_Y0_OVERRIDE=N      # Override initial predictor token (skip prompt priming)
 
 # Cache debugging
 PARAKEET_CACHE_LEN_OVERRIDE=-1  # Use cache capacity as cache_len
+PARAKEET_DISABLE_CACHE=1        # Disable encoder cache (for comparison)
+PARAKEET_MAX_FRAMES_PER_PUSH=256 # Max frames per streaming push (chunks larger inputs)
 ```
 
 ### Replay harness

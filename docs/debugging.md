@@ -50,9 +50,12 @@ The debugging infrastructure provides:
 | `PARAKEET_BLANK_PENALTY=N` | Adjust blank token penalty |
 | `PARAKEET_DEBUG_BLANK_SCAN=1` | Log blank-vs-nonblank margin summary per chunk |
 | `PARAKEET_DEBUG_EMIT_TOKENS=1` | Log emitted token ids/pieces and per-chunk token summary |
+| `PARAKEET_DEBUG_JOINT_TOPK=1` | Log top-k over the full joint output vector |
 | `PARAKEET_DISABLE_PUNCT_SUPPRESSION=1` | Disable leading punctuation suppression |
+| `PARAKEET_JOINT_DUR_FIRST=0/1` | Force duration-vs-token head ordering for joint slicing |
 | `PARAKEET_Y0_OVERRIDE=N` | Override initial predictor token (skip prompt priming) |
 | `PARAKEET_DISABLE_CACHE=1` | Disable encoder cache (for comparison) |
+| `PARAKEET_MAX_FRAMES_PER_PUSH=N` | Max frames per streaming push (chunks larger inputs) |
 
 ---
 

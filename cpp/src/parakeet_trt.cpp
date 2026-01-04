@@ -68,6 +68,14 @@ bool get_debug_topk() {
   return std::string(v) == "1";
 }
 
+bool get_debug_joint_topk() {
+  const char* v = std::getenv("PARAKEET_DEBUG_JOINT_TOPK");
+  if (!v || !*v) {
+    return false;
+  }
+  return std::string(v) == "1";
+}
+
 bool get_env_bool(const char* name, bool fallback) {
   const char* v = std::getenv(name);
   if (!v || !*v) return fallback;
@@ -1846,6 +1854,48 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
   if (!session || !features_bct_f32) return -1;
   if (num_frames == 0) return 0;
   try {
+    static int32_t s_max_frames_override = -1;
+    static std::once_flag s_max_frames_once;
+    std::call_once(s_max_frames_once, []() {
+      const uint64_t v = get_env_u64("PARAKEET_MAX_FRAMES_PER_PUSH", 0);
+      if (v > 0 && v < static_cast<uint64_t>(std::numeric_limits<int32_t>::max())) {
+        s_max_frames_override = static_cast<int32_t>(v);
+        std::cerr << "[parakeet_trt] PARAKEET_MAX_FRAMES_PER_PUSH=" << s_max_frames_override << "\n";
+      } else if (v > 0) {
+        std::cerr << "[parakeet_trt] WARNING: PARAKEET_MAX_FRAMES_PER_PUSH out of range; ignoring\n";
+      }
+    });
+    int32_t max_frames = s_max_frames_override > 0
+                             ? s_max_frames_override
+                             : (session->enc_streaming ? kCacheSize : 256);
+    if (session->enc_streaming && session->cache_len_capacity > 0) {
+      max_frames = std::min<int32_t>(max_frames, static_cast<int32_t>(session->cache_len_capacity));
+    }
+    if (max_frames < 1) max_frames = 1;
+    if (session->enc_streaming && num_frames > static_cast<size_t>(max_frames)) {
+      const size_t total_frames = num_frames;
+      const size_t chunks = (total_frames + static_cast<size_t>(max_frames) - 1) / static_cast<size_t>(max_frames);
+      std::cerr << "[parakeet_trt] push_features chunking total_frames=" << total_frames
+                << " max_frames=" << max_frames
+                << " chunks=" << chunks
+                << "\n";
+      std::vector<float> chunk_buf(static_cast<size_t>(kNMels) * static_cast<size_t>(max_frames));
+      size_t offset = 0;
+      while (offset < total_frames) {
+        const size_t chunk_frames =
+            std::min(static_cast<size_t>(max_frames), total_frames - offset);
+        for (int32_t c = 0; c < kNMels; ++c) {
+          const float* src = features_bct_f32 + static_cast<size_t>(c) * total_frames + offset;
+          float* dst = chunk_buf.data() + static_cast<size_t>(c) * chunk_frames;
+          std::memcpy(dst, src, chunk_frames * sizeof(float));
+        }
+        const int rc = parakeet_push_features(session, chunk_buf.data(), chunk_frames);
+        if (rc != 0) return rc;
+        offset += chunk_frames;
+      }
+      return 0;
+    }
+
     debug_stage_marker("push_features:enter", &session->debug, session->stream);
     if (!session->host_ptrs_logged) {
       std::cerr << "[parakeet_trt] host_ptrs"
@@ -1901,8 +1951,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     const int32_t T_valid = static_cast<int32_t>(num_frames);
     int32_t T_shape = T_valid;
     if (session->enc_streaming) {
-      if (T_valid < 584 || T_valid > 592) {
-        throw std::runtime_error("num_frames must be in [584,592] for streaming encoder");
+      if (T_valid > max_frames) {
+        throw std::runtime_error("num_frames exceeds PARAKEET_MAX_FRAMES_PER_PUSH in streaming mode");
       }
     } else {
       // Encoder engines are currently profiled for 16..256 frames.
@@ -2540,7 +2590,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     }
     const int head_dim = std::min(joint_dim, kJointVocabSize);
     const int dur_bins = std::max(0, head_dim - token_logit_size);
-    const bool dur_first = get_env_bool("PARAKEET_JOINT_DUR_FIRST", dur_bins > 0);
+    const bool dur_first = get_env_bool("PARAKEET_JOINT_DUR_FIRST", false);
     const int tok_offset = dur_first ? dur_bins : 0;
     const int dur_offset = dur_first ? 0 : token_logit_size;
     const int dur_bins_used = (dur_bins > 0) ? std::min(dur_bins, kNumDurations) : kNumDurations;
@@ -2548,6 +2598,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     const bool blank_scan = get_env_bool("PARAKEET_DEBUG_BLANK_SCAN", false);
     const bool debug_emit_tokens = get_env_bool("PARAKEET_DEBUG_EMIT_TOKENS", false);
     const bool disable_punct_suppression = get_env_bool("PARAKEET_DISABLE_PUNCT_SUPPRESSION", false);
+    const bool debug_joint_topk = get_debug_joint_topk();
     const bool blank_in_range = (kBlankId >= 0 && kBlankId < token_span);
     size_t blank_scan_steps = 0;
     size_t blank_scan_blank_pref = 0;
@@ -2955,6 +3006,59 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           } else {
             blank_scan_nonblank_pref++;
           }
+        }
+        if (debug_joint_topk && u == 0 &&
+            (time_idx == 0 || time_idx == (T_enc / 2) || time_idx + 1 == T_enc)) {
+          const int k = 10;
+          int top_ids[k] = {0};
+          float top_vals[k];
+          for (int i = 0; i < k; ++i) top_vals[i] = -1.0e9f;
+          for (int32_t i = 0; i < head_dim; ++i) {
+            const float v = head_logits[static_cast<size_t>(i)];
+            int insert = -1;
+            for (int j = 0; j < k; ++j) {
+              if (v > top_vals[j]) {
+                insert = j;
+                break;
+              }
+            }
+            if (insert >= 0) {
+              for (int j = k - 1; j > insert; --j) {
+                top_vals[j] = top_vals[j - 1];
+                top_ids[j] = top_ids[j - 1];
+              }
+              top_vals[insert] = v;
+              top_ids[insert] = i;
+            }
+          }
+          std::string topk = "[";
+          for (int j = 0; j < k; ++j) {
+            if (j) topk += ",";
+            const int idx = top_ids[j];
+            const bool in_tok = (idx >= tok_offset && idx < tok_offset + token_span);
+            const bool in_dur = (idx >= dur_offset && idx < dur_offset + dur_bins_used);
+            const int local = in_tok ? (idx - tok_offset) : (in_dur ? (idx - dur_offset) : -1);
+            const char* region = in_tok ? "token" : (in_dur ? "dur" : "other");
+            topk += "{\"id\":" + std::to_string(idx) +
+                    ",\"v\":" + std::to_string(top_vals[j]) +
+                    ",\"region\":\"" + region +
+                    "\",\"local\":" + std::to_string(local) + "}";
+          }
+          topk += "]";
+          dbglog_ndjson(
+              "H15",
+              "cpp/src/parakeet_trt.cpp:parakeet_push_features:joint_topk",
+              "Top-k joint logits (full head)",
+              std::string("{\"time_idx\":") + std::to_string(time_idx) +
+                  ",\"t_enc\":" + std::to_string(T_enc) +
+                  ",\"head_dim\":" + std::to_string(head_dim) +
+                  ",\"token_span\":" + std::to_string(token_span) +
+                  ",\"tok_offset\":" + std::to_string(tok_offset) +
+                  ",\"dur_offset\":" + std::to_string(dur_offset) +
+                  ",\"dur_bins_used\":" + std::to_string(dur_bins_used) +
+                  ",\"dur_first\":" + std::string(dur_first ? "true" : "false") +
+                  ",\"blank_logit\":" + std::to_string(blank_logit) +
+                  ",\"topk\":" + topk + "}");
         }
         if (get_debug_topk() && u == 0 &&
             (time_idx == 0 || time_idx == (T_enc / 2) || time_idx + 1 == T_enc)) {
