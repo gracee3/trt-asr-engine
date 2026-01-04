@@ -859,6 +859,8 @@ const char* dtype_name(nvinfer1::DataType dt) {
       return "i8";
     case nvinfer1::DataType::kINT32:
       return "i32";
+    case nvinfer1::DataType::kINT64:
+      return "i64";
     case nvinfer1::DataType::kBOOL:
       return "bool";
     default:
@@ -1564,8 +1566,40 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       const int64_t cache_len_zero = 0;
       debug_memcpy_async(session->d_cache_last_channel_len, &cache_len_zero, sizeof(cache_len_zero),
                          cudaMemcpyHostToDevice, session->stream, "enc:cache_len_in", &session->debug);
-      debug_memset_async(session->d_cache_last_channel_len_out, 0, sizeof(int64_t), session->stream,
+      const char* cache_len_out_name = resolve_tensor_name(session->enc, "cache_last_channel_len_out");
+      if (!cache_len_out_name) {
+        throw std::runtime_error("Missing tensor binding: cache_last_channel_len_out");
+      }
+      const auto cache_len_out_shape = session->enc.ctx->getTensorShape(cache_len_out_name);
+      const auto cache_len_out_dt = session->enc.engine->getTensorDataType(cache_len_out_name);
+      const size_t cache_len_out_bytes = volume(cache_len_out_shape) * dtype_size(cache_len_out_dt);
+      if (cache_len_out_bytes == 0) {
+        throw std::runtime_error("cache_last_channel_len_out has zero-sized shape (shape=" +
+                                 dims_to_string(cache_len_out_shape) + ")");
+      }
+      debug_memset_async(session->d_cache_last_channel_len_out, 0, cache_len_out_bytes, session->stream,
                          "enc:cache_len_out_zero", &session->debug);
+      static std::atomic<bool> cache_len_pre_logged{false};
+      if (!cache_len_pre_logged.exchange(true)) {
+        int64_t cache_len_out_pre = -1;
+        if (cache_len_out_dt == nvinfer1::DataType::kINT64) {
+          debug_memcpy_async(&cache_len_out_pre, session->d_cache_last_channel_len_out, sizeof(cache_len_out_pre),
+                             cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out_pre", &session->debug);
+        } else if (cache_len_out_dt == nvinfer1::DataType::kINT32) {
+          int32_t cache_len_out_pre32 = -1;
+          debug_memcpy_async(&cache_len_out_pre32, session->d_cache_last_channel_len_out, sizeof(cache_len_out_pre32),
+                             cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out_pre", &session->debug);
+          cache_len_out_pre = static_cast<int64_t>(cache_len_out_pre32);
+        }
+        cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(cache_len_out_pre)");
+        const int cache_len_out_idx = io_tensor_index(session->enc, cache_len_out_name);
+        std::cerr << "[parakeet_trt] cache_last_channel_len_out pre binding=" << cache_len_out_name
+                  << " idx=" << cache_len_out_idx
+                  << " dtype=" << dtype_name(cache_len_out_dt)
+                  << " dims=" << dims_to_string(cache_len_out_shape)
+                  << " bytes=" << cache_len_out_bytes
+                  << " value=" << cache_len_out_pre << "\n";
+      }
     }
 
     // Host -> device: length
@@ -1639,12 +1673,27 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         throw std::runtime_error("Missing tensor binding: cache_last_channel_len_out");
       }
       const auto cache_len_dt = session->enc.engine->getTensorDataType(cache_len_out_name);
-      if (cache_len_dt != nvinfer1::DataType::kINT64) {
-        throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out dtype != int64");
+      if (cache_len_dt != nvinfer1::DataType::kINT64 && cache_len_dt != nvinfer1::DataType::kINT32) {
+        throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out dtype must be int32 or int64");
       }
-      int64_t cache_len_out_host = -1;
-      debug_memcpy_async(&cache_len_out_host, session->d_cache_last_channel_len_out, sizeof(cache_len_out_host),
-                         cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out", &session->debug);
+      const auto cache_len_out_shape = session->enc.ctx->getTensorShape(cache_len_out_name);
+      const size_t cache_len_out_bytes = volume(cache_len_out_shape) * dtype_size(cache_len_dt);
+      if (cache_len_out_bytes == 0) {
+        throw std::runtime_error("cache_last_channel_len_out has zero-sized shape (shape=" +
+                                 dims_to_string(cache_len_out_shape) + ")");
+      }
+      int64_t cache_len_out_val = -1;
+      if (cache_len_dt == nvinfer1::DataType::kINT64) {
+        int64_t cache_len_out_host = -1;
+        debug_memcpy_async(&cache_len_out_host, session->d_cache_last_channel_len_out, sizeof(cache_len_out_host),
+                           cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out", &session->debug);
+        cache_len_out_val = cache_len_out_host;
+      } else {
+        int32_t cache_len_out_host = -1;
+        debug_memcpy_async(&cache_len_out_host, session->d_cache_last_channel_len_out, sizeof(cache_len_out_host),
+                           cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out", &session->debug);
+        cache_len_out_val = static_cast<int64_t>(cache_len_out_host);
+      }
       cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(cache_len_out)");
       static std::atomic<bool> cache_len_logged{false};
       if (!cache_len_logged.exchange(true)) {
@@ -1652,16 +1701,17 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         std::cerr << "[parakeet_trt] cache_last_channel_len_out binding=" << cache_len_out_name
                   << " idx=" << cache_len_out_idx
                   << " dtype=" << dtype_name(cache_len_dt)
-                  << " bytes=" << sizeof(cache_len_out_host)
-                  << " value=" << cache_len_out_host << "\n";
+                  << " dims=" << dims_to_string(cache_len_out_shape)
+                  << " bytes=" << cache_len_out_bytes
+                  << " value=" << cache_len_out_val << "\n";
       }
-      if (cache_len_out_host < 0) {
+      if (cache_len_out_val < 0) {
         throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out < 0 (value=" +
-                                 std::to_string(cache_len_out_host) + ")");
+                                 std::to_string(cache_len_out_val) + ")");
       }
-      if (cache_len_out_host > 0) {
+      if (cache_len_out_val > 0) {
         throw std::runtime_error("Streaming contract violated: cache_last_channel_len_out > 0 (value=" +
-                                 std::to_string(cache_len_out_host) + ")");
+                                 std::to_string(cache_len_out_val) + ")");
       }
     }
 
