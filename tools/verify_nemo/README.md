@@ -23,12 +23,32 @@ python streaming_encoder_cache.py \
   --cache-size 256 \
   --num-chunks 3
 ```
+To force stateful cache carryover, override cache_drop_size:
+```bash
+python streaming_encoder_cache.py \
+  --model ../../models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
+  --cache-size 256 \
+  --cache-drop-size 0 \
+  --num-chunks 3
+```
 
 ### Model architecture audit (FastConformer/TDT checks)
 ```bash
 python audit_model_arch.py \
   --model ../../models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
   --out audit_model_arch.json
+```
+
+### Reference JSONL with streaming schedule
+```bash
+python streaming_encoder_reference.py \
+  --model ../../models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
+  --device cpu \
+  --cache-size 256 \
+  --cache-drop-size 0 \
+  --use-streaming-cfg-schedule \
+  --num-chunks 50 \
+  --jsonl-out artifacts/reference/pytorch_reference_50.jsonl
 ```
 
 ### Requirements

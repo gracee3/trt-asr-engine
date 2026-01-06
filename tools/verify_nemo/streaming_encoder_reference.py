@@ -238,6 +238,7 @@ def main():
     parser.add_argument("--shift-size", type=str, default="", help="Override streaming_cfg.shift_size (comma-separated)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--skip-setup-streaming-params", action="store_true", help="Skip encoder.setup_streaming_params call")
+    parser.add_argument("--use-streaming-cfg-schedule", action="store_true", help="Use streaming_cfg chunk/shift/pre-encode schedule")
     parser.add_argument("--jsonl-out", type=str, required=True, help="Write per-chunk reference JSONL with tensor data")
     args = parser.parse_args()
 
@@ -320,6 +321,47 @@ def main():
     print(f"Streaming config: chunk_size={getattr(cfg, 'chunk_size', None)} shift_size={getattr(cfg, 'shift_size', None)}")
     print(f"  cache_drop_size={getattr(cfg, 'cache_drop_size', None)} valid_out_len={getattr(cfg, 'valid_out_len', None)}")
 
+    def _normalize_pair(value, fallback):
+        if value is None:
+            return [fallback, fallback]
+        if isinstance(value, (list, tuple)):
+            if len(value) >= 2:
+                return [value[0], value[1]]
+            if len(value) == 1:
+                return [value[0], value[0]]
+            return [fallback, fallback]
+        return [value, value]
+
+    def _build_schedule(num_chunks, chunk_len_default):
+        cfg = getattr(encoder, "streaming_cfg", None)
+        chunk_sizes = _normalize_pair(getattr(cfg, "chunk_size", None) if cfg else None, chunk_len_default)
+        shift_sizes = _normalize_pair(getattr(cfg, "shift_size", None) if cfg else None, chunk_sizes[1])
+        pre_encode_sizes = _normalize_pair(getattr(cfg, "pre_encode_cache_size", None) if cfg else None, 0)
+
+        schedule = []
+        start = 0
+        for idx in range(num_chunks):
+            regime = 0 if idx == 0 else 1
+            chunk_size = int(chunk_sizes[regime])
+            shift_size = int(shift_sizes[regime])
+            pre_encode = int(pre_encode_sizes[regime])
+            slice_start = max(0, start - pre_encode)
+            slice_end = start + chunk_size
+            schedule.append(
+                {
+                    "idx": idx,
+                    "start": start,
+                    "chunk_size": chunk_size,
+                    "shift_size": shift_size,
+                    "pre_encode": pre_encode,
+                    "slice_start": slice_start,
+                    "slice_end": slice_end,
+                }
+            )
+            start += shift_size
+        total_frames = max(item["slice_end"] for item in schedule) if schedule else chunk_len_default
+        return schedule, total_frames
+
     # Initialize cache state
     cache_state = _call_get_initial_cache_state(encoder, batch_size=1)
     cache_state = tuple(
@@ -327,7 +369,12 @@ def main():
     )
 
     # Generate random audio sequence
-    feature_buffer = torch.randn(1, feature_dim, chunk_len * args.num_chunks, device=device)
+    if args.use_streaming_cfg_schedule:
+        schedule, total_frames = _build_schedule(args.num_chunks, chunk_len)
+        feature_buffer = torch.randn(1, feature_dim, total_frames, device=device)
+    else:
+        schedule = None
+        feature_buffer = torch.randn(1, feature_dim, chunk_len * args.num_chunks, device=device)
 
     with open(args.jsonl_out, "w", encoding="utf-8") as jsonl_handle:
         with torch.no_grad():
@@ -335,10 +382,18 @@ def main():
                 print(f"\n=== Chunk {idx} ===")
 
                 # Extract chunk
-                start_frame = idx * chunk_len
-                end_frame = (idx + 1) * chunk_len
-                x = feature_buffer[:, :, start_frame:end_frame]
-                x_len = torch.tensor([chunk_len], dtype=torch.int64, device=device)
+                schedule_item = None
+                if schedule:
+                    item = schedule[idx]
+                    schedule_item = item
+                    x = feature_buffer[:, :, item["slice_start"] : item["slice_end"]]
+                    x_len_val = item["slice_end"] - item["slice_start"]
+                else:
+                    start_frame = idx * chunk_len
+                    end_frame = (idx + 1) * chunk_len
+                    x = feature_buffer[:, :, start_frame:end_frame]
+                    x_len_val = chunk_len
+                x_len = torch.tensor([x_len_val], dtype=torch.int64, device=device)
 
                 # Save inputs
                 inputs = {
@@ -374,21 +429,32 @@ def main():
                 }
 
                 # Build record
+                metadata = {
+                    "chunk_len": x_len_val,
+                    "encoder_output_shape": list(encoder_output.shape),
+                    "encoded_lengths_value": int(encoded_lengths.item()),
+                    "cache_len_out_value": int(cache_last_channel_len_out.item()),
+                    "timing_ms": {
+                        "step": step_ms,
+                        "postprocess": post_ms,
+                        "total": step_ms + post_ms,
+                    },
+                }
+                if schedule_item is not None:
+                    metadata["schedule"] = {
+                        "start": schedule_item["start"],
+                        "chunk_size": schedule_item["chunk_size"],
+                        "shift_size": schedule_item["shift_size"],
+                        "pre_encode": schedule_item["pre_encode"],
+                        "slice_start": schedule_item["slice_start"],
+                        "slice_end": schedule_item["slice_end"],
+                    }
+
                 record = {
                     "chunk_idx": idx,
                     "inputs": inputs,
                     "outputs": outputs,
-                    "metadata": {
-                        "chunk_len": chunk_len,
-                        "encoder_output_shape": list(encoder_output.shape),
-                        "encoded_lengths_value": int(encoded_lengths.item()),
-                        "cache_len_out_value": int(cache_last_channel_len_out.item()),
-                        "timing_ms": {
-                            "step": step_ms,
-                            "postprocess": post_ms,
-                            "total": step_ms + post_ms,
-                        },
-                    },
+                    "metadata": metadata,
                 }
 
                 jsonl_handle.write(json.dumps(record) + "\n")

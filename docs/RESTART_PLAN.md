@@ -56,6 +56,7 @@ python -u tools/export_onnx/export.py \
   --out out/onnx/parakeet-tdt-0.6b-v3/streaming \
   --component encoder_streaming \
   --streaming-cache-size 256 \
+  --streaming-cache-drop-size 0 \
   --device cpu
 ```
 
