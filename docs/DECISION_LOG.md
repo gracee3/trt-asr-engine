@@ -9,7 +9,7 @@
 - Decision: Default joint layout is token-first, duration-last.
   Alternatives: duration-first layout via runtime switch.
   Evidence: NeMo TDT loss slices `acts[..., :-n_durations]` vs `acts[..., -n_durations:]` in `nemo/collections/asr/losses/rnnt_pytorch.py`; `model_config.yaml` sets `joint.num_extra_outputs=5` and `loss.tdt_kwargs.durations=[0,1,2,3,4]`; `tools/export_onnx/out/joint.onnx` output is a single linear of size 8198 (no concat).
-  Validation: joint ONNX inspected (LogSoftmax axis=-1 output), layout consistent with durations appended at tail; runtime toggle remains for diagnostics.
+  Validation: joint ONNX inspected (LogSoftmax axis=-1 output), layout consistent with durations appended at tail; re-export to logits pending, runtime toggle remains for diagnostics.
 
 - Decision: Treat current streaming export as chunk-isolated (`cache_len=0`).
   Alternatives: true stateful cache carryover.
@@ -25,3 +25,13 @@
   Alternatives: allow duration=0 for blank or clamp to 1.
   Evidence: TDT paper note disallowing duration=0 for blank (page 3/23).
   Validation: run decode parity vs PyTorch with both policies on deterministic samples.
+
+- Decision: Export joint output as raw logits (no global LogSoftmax).
+  Alternatives: keep LogSoftmax in ONNX and renormalize per head at runtime.
+  Evidence: TDT paper specifies independently normalized token/duration heads; NeMo TDT loss slices token vs duration outputs; export now forces `joint.log_softmax=False`.
+  Validation: re-export `joint.onnx` and confirm no LogSoftmax node on `joint_output`.
+
+- Decision: Target true stateful streaming with cache carryover.
+  Alternatives: keep chunk-isolated streaming (`cache_len_out == 0`).
+  Evidence: streaming paper requires cache/context discipline for equivalence; NeMo `ConformerEncoder` implements cache carryover when `cache_last_channel_len` is nonzero.
+  Validation: re-export streaming encoder, generate reference JSONL with nonzero cache_len, and pass closed-loop parity with cache feedback.

@@ -83,15 +83,16 @@ This is a repo scan snapshot for trt-asr-engine. Tree view captured in `docs/inv
   - `rust/cli/`: CLI entrypoint.
 
 ## Contracts + metadata sources
-- `contracts/encoder_streaming.contract.json`: streaming encoder binding contract.
+- `contracts/encoder_streaming.contract.json`: legacy streaming encoder binding contract (chunk-isolated).
 - `docs/runtime_contract.md`: offline encoder/predictor/joint bindings.
 - `tools/export_onnx/out/model_meta.json` (also `out/model_meta.json`): export metadata.
 - `audit_model_arch.json`: architecture audit from NeMo checkpoint.
 - `models/parakeet-tdt-0.6b-v3/build_report.json`: TRT build profiles/params.
 
 ## Unknowns / decision points
-- Streaming mode target: chunk-isolated (current) vs stateful cache carryover.
+- Streaming mode target is now stateful cache carryover; needs re-export + parity to validate cache_len behavior.
 - Export cache size mismatch: `last_channel_cache_size=10000` (NeMo config) vs `cache_size=256` (streaming export).
+- Joint output normalization: current `joint.onnx` uses global LogSoftmax; re-export is required to emit raw logits.
 - Blank + duration=0 policy: paper disallows; runtime currently has a heuristic.
 - Max symbols per timestep: runtime uses 8 (speculative; needs source or experiment).
 - Predictor details: RNN cell type not explicit in config; confirm from NeMo.

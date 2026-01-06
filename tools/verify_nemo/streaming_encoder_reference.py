@@ -231,6 +231,7 @@ def main():
     parser.add_argument("--model", required=True, help="Path to .nemo or HF model name")
     parser.add_argument("--device", default="cuda", help="cuda or cpu")
     parser.add_argument("--cache-size", type=int, default=256)
+    parser.add_argument("--cache-drop-size", type=int, default=-1, help="Override streaming_cfg.cache_drop_size (>=0)")
     parser.add_argument("--chunk-len", type=int, default=0, help="Feature frames per chunk")
     parser.add_argument("--num-chunks", type=int, default=3)
     parser.add_argument("--chunk-size", type=str, default="", help="Override streaming_cfg.chunk_size (comma-separated)")
@@ -254,6 +255,19 @@ def main():
     model = model.to(device)
 
     encoder = model.encoder
+
+    def _apply_cache_drop_size(encoder, cache_drop_size):
+        if not hasattr(encoder, "streaming_cfg") or cache_drop_size is None:
+            return
+        try:
+            if hasattr(encoder.streaming_cfg, "cache_drop_size"):
+                encoder.streaming_cfg.cache_drop_size = cache_drop_size
+            if hasattr(encoder, "layers"):
+                for m in encoder.layers.modules():
+                    if hasattr(m, "cache_drop_size"):
+                        m.cache_drop_size = cache_drop_size
+        except Exception as exc:
+            print(f"WARN: failed to apply cache_drop_size override: {exc}")
     _print_sig("encoder.cache_aware_stream_step", encoder.cache_aware_stream_step)
     if hasattr(encoder, "streaming_post_process"):
         _print_sig("encoder.streaming_post_process", encoder.streaming_post_process)
@@ -269,6 +283,8 @@ def main():
                 updates["chunk_size"] = _parse_int_list(args.chunk_size)
             if args.shift_size:
                 updates["shift_size"] = _parse_int_list(args.shift_size)
+            if args.cache_drop_size >= 0:
+                updates["cache_drop_size"] = int(args.cache_drop_size)
             encoder.streaming_cfg = dataclasses.replace(cfg, **updates)
         else:
             if hasattr(cfg, "last_channel_cache_size"):
@@ -277,6 +293,10 @@ def main():
                 cfg.chunk_size = _parse_int_list(args.chunk_size)
             if args.shift_size and hasattr(cfg, "shift_size"):
                 cfg.shift_size = _parse_int_list(args.shift_size)
+            if args.cache_drop_size >= 0 and hasattr(cfg, "cache_drop_size"):
+                cfg.cache_drop_size = int(args.cache_drop_size)
+        if args.cache_drop_size >= 0:
+            _apply_cache_drop_size(encoder, int(args.cache_drop_size))
         print(f"Updated streaming_cfg: {encoder.streaming_cfg}")
     else:
         print("WARN: encoder has no streaming_cfg; cache-aware streaming may be unavailable.")
@@ -286,7 +306,9 @@ def main():
         # setup_streaming_params resets streaming_cfg; reapply the cache size override
         if hasattr(encoder, "streaming_cfg") and hasattr(encoder.streaming_cfg, "last_channel_cache_size"):
             encoder.streaming_cfg.last_channel_cache_size = args.cache_size
-            print(f"Post-setup streaming_cfg: {encoder.streaming_cfg}")
+        if args.cache_drop_size >= 0:
+            _apply_cache_drop_size(encoder, int(args.cache_drop_size))
+        print(f"Post-setup streaming_cfg: {encoder.streaming_cfg}")
 
     feature_dim = int(model.cfg.preprocessor.features)
     chunk_len = args.chunk_len or _select_chunk_len(

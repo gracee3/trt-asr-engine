@@ -95,7 +95,17 @@ def _infer_chunk_shift_steps(encoder, streaming_cfg):
                 shift_steps = None
     return chunk_steps, shift_steps
 
-def _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size):
+def _apply_cache_drop_size_override(encoder, cache_drop_size: int):
+    try:
+        if not hasattr(encoder, "layers"):
+            return
+        for m in encoder.layers.modules():
+            if hasattr(m, "cache_drop_size"):
+                m.cache_drop_size = cache_drop_size
+    except Exception as exc:
+        logger.warning(f"Failed to apply cache_drop_size override to encoder layers: {exc}")
+
+def _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size, cache_drop_size):
     cfg = getattr(encoder, "streaming_cfg", None)
     if cfg is None:
         logger.warning("Encoder has no streaming_cfg; cache-aware export may be unavailable.")
@@ -107,6 +117,8 @@ def _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size):
         updates["chunk_size"] = chunk_size
     if shift_size:
         updates["shift_size"] = shift_size
+    if cache_drop_size is not None:
+        updates["cache_drop_size"] = cache_drop_size
     if not updates:
         return cfg
     if dataclasses.is_dataclass(cfg):
@@ -115,6 +127,8 @@ def _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size):
         for key, value in updates.items():
             if hasattr(cfg, key):
                 setattr(cfg, key, value)
+    if "cache_drop_size" in updates:
+        _apply_cache_drop_size_override(encoder, updates["cache_drop_size"])
     logger.info(f"Updated encoder.streaming_cfg for streaming export: {encoder.streaming_cfg}")
     return getattr(encoder, "streaming_cfg", cfg)
 
@@ -463,6 +477,24 @@ def _disable_joint_fuse_loss_wer_for_export(joint: torch.nn.Module, *, tag: str)
         except Exception as e:
             logger.warning(f"[{tag}] Failed to restore fuse_loss_wer: {e}")
 
+@contextmanager
+def _force_joint_logits_for_export(joint: torch.nn.Module, *, tag: str):
+    """
+    Export-only patch: force RNNTJoint to emit raw logits (no log-softmax).
+    This aligns with TDT's independently-normalized token/duration heads.
+    """
+    orig = None
+    try:
+        if hasattr(joint, "log_softmax"):
+            orig = getattr(joint, "log_softmax", None)
+            setattr(joint, "log_softmax", False)
+            logger.info(f"[{tag}] log_softmax set to False for export (orig={orig})")
+        yield
+    finally:
+        if orig is not None and hasattr(joint, "log_softmax"):
+            setattr(joint, "log_softmax", orig)
+            logger.info(f"[{tag}] log_softmax restored to {orig}")
+
 class PredictorWrapper(torch.nn.Module):
     def __init__(self, predictor):
         super().__init__()
@@ -558,6 +590,7 @@ def export_encoder_streaming(
     device,
     dynamic=True,
     cache_size=256,
+    cache_drop_size=None,
     chunk_size=None,
     shift_size=None,
     dummy_len=0,
@@ -574,11 +607,11 @@ def export_encoder_streaming(
     else:
         logger.warning("encoder.export_cache_support not found; continuing without it")
 
-    cfg = _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size)
+    cfg = _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size, cache_drop_size)
     if not skip_setup:
         _call_setup_streaming_params(encoder)
         # setup_streaming_params may reset streaming_cfg; reapply overrides if needed.
-        cfg = _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size)
+        cfg = _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size, cache_drop_size)
     else:
         logger.info("Skipping encoder.setup_streaming_params per CLI flag")
 
@@ -686,20 +719,21 @@ def export_joint(model, out_dir, device):
     with _neutralize_dropout_attrs_for_export(model.decoder, tag="joint/decoder"):
         with _neutralize_dropout_attrs_for_export(model.joint, tag="joint/joint"):
             with _disable_joint_fuse_loss_wer_for_export(model.joint, tag="joint"):
-                logger.info("Calling torch.onnx.export for Joint (legacy, no torch.export/dynamo)...")
-                _export_onnx_legacy(
-                    wrapper,
-                    (dummy_enc, dummy_pred),
-                    path,
-                    input_names=['encoder_output', 'predictor_output'],
-                    output_names=['joint_output'],
-                    dynamic_axes={
-                        'encoder_output': {0: 'batch', 2: 'time'},
-                        'predictor_output': {0: 'batch', 2: 'token_len'},
-                        'joint_output': {0: 'batch', 1: 'time', 2: 'token_len'},
-                    },
-                    opset_version=18,
-                )
+                with _force_joint_logits_for_export(model.joint, tag="joint"):
+                    logger.info("Calling torch.onnx.export for Joint (legacy, no torch.export/dynamo)...")
+                    _export_onnx_legacy(
+                        wrapper,
+                        (dummy_enc, dummy_pred),
+                        path,
+                        input_names=['encoder_output', 'predictor_output'],
+                        output_names=['joint_output'],
+                        dynamic_axes={
+                            'encoder_output': {0: 'batch', 2: 'time'},
+                            'predictor_output': {0: 'batch', 2: 'token_len'},
+                            'joint_output': {0: 'batch', 1: 'time', 2: 'token_len'},
+                        },
+                        opset_version=18,
+                    )
     logger.info(f"Finished writing: {path}")
     validate_onnx(path)
 
@@ -801,6 +835,7 @@ def main():
     parser.add_argument("--streaming-cache-size", type=int, default=256, help="Streaming encoder cache size (last_channel_cache_size)")
     parser.add_argument("--streaming-chunk-size", type=str, default="", help="Override encoder.streaming_cfg.chunk_size (comma-separated)")
     parser.add_argument("--streaming-shift-size", type=str, default="", help="Override encoder.streaming_cfg.shift_size (comma-separated)")
+    parser.add_argument("--streaming-cache-drop-size", type=int, default=-1, help="Override encoder.streaming_cfg.cache_drop_size (>=0)")
     parser.add_argument("--streaming-dummy-len", type=int, default=0, help="Override dummy chunk length for streaming export")
     parser.add_argument("--streaming-no-postprocess", action="store_true", help="Skip streaming_post_process in streaming encoder export")
     parser.add_argument("--streaming-skip-setup", action="store_true", help="Skip encoder.setup_streaming_params in streaming export")
@@ -896,12 +931,14 @@ def main():
                 elif comp == 'encoder_streaming':
                     chunk_size = _parse_int_list(args.streaming_chunk_size) if args.streaming_chunk_size else None
                     shift_size = _parse_int_list(args.streaming_shift_size) if args.streaming_shift_size else None
+                    cache_drop_size = args.streaming_cache_drop_size if args.streaming_cache_drop_size >= 0 else None
                     export_encoder_streaming(
                         model,
                         args.out,
                         device,
                         dynamic=not args.fixed,
                         cache_size=args.streaming_cache_size,
+                        cache_drop_size=cache_drop_size,
                         chunk_size=chunk_size,
                         shift_size=shift_size,
                         dummy_len=args.streaming_dummy_len,

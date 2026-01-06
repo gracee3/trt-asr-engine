@@ -219,7 +219,7 @@
           "dtype": "float32",
           "shape": ["B", "T", "U", 8198],
           "layout": "BTUV",
-          "normalization": {"type": "log_softmax", "axis": -1},
+          "normalization": {"type": "logits"},
           "token_head": {"offset": 0, "size": 8193},
           "duration_head": {"offset": 8193, "size": 5}
         }
@@ -237,9 +237,11 @@
     "emit_rule": "emit_if_token_is_nonblank"
   },
   "streaming": {
-    "mode": "chunk_isolated",
+    "mode": "stateful_cache",
     "valid_out_len": 1,
-    "cache_len_expected": 0,
+    "cache_len_expected": "dynamic",
+    "cache_len_bounds": {"min": 0, "max": 256},
+    "cache_len_behavior": "non-decreasing until saturated when cache_drop_size < max_audio_length",
     "chunk_size": [577, 584],
     "shift_size": [1, 8],
     "cache_drop_size": 72,

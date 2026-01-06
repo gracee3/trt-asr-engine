@@ -7,7 +7,7 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - Export metadata: `tools/export_onnx/out/model_meta.json` (also mirrored in `out/model_meta.json`).
 - Architecture audit: `audit_model_arch.json` (from `tools/verify_nemo/audit_model_arch.py`).
 - Runtime bindings: `docs/runtime_contract.md` (offline encoder/predictor/joint bindings).
-- Streaming encoder contract: `contracts/encoder_streaming.contract.json`.
+- Streaming encoder contract (legacy chunk-isolated): `contracts/encoder_streaming.contract.json`.
 - TRT build profiles: `models/parakeet-tdt-0.6b-v3/build_report.json` and `tools/build_trt/README.md`.
 - Parity results and streaming mode evidence: `ONNX_ORT_PARITY_README.md`, `ONNX_PARITY_RESULTS.md`.
 
@@ -60,11 +60,11 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - `encoder_output` shape: `docs/runtime_contract.md` -> `[B, 1024, T_enc]`.
 
 ### Encoder IO (streaming + caches)
-- Cache input/output shapes: `contracts/encoder_streaming.contract.json`.
-- `valid_out_len=1` and `encoded_lengths==1` expectation: `contracts/encoder_streaming.contract.json` + `ONNX_ORT_PARITY_README.md`.
-- Cache isolation (`cache_last_channel_len_out == 0`): `ONNX_ORT_PARITY_README.md` + `ONNX_PARITY_RESULTS.md`.
+- Cache input/output shapes: `contracts/encoder_streaming.contract.json` (legacy chunk-isolated contract; shapes still valid).
+- `valid_out_len=1` expectation: `audit_model_arch.json` -> `encoder.streaming_cfg.valid_out_len` (re-validate after stateful export).
 - Streaming chunk params (`chunk_size`, `shift_size`, `cache_drop_size`, `pre_encode_cache_size`, `drop_extra_pre_encoded`): `audit_model_arch.json` -> `encoder.streaming_cfg`.
 - Cache semantics + need for context-limited caching: `docs/txt/2312.17279v3.txt` (page 4/8).
+- Stateful cache carryover behavior: implemented in NeMo `ConformerEncoder.forward_internal` and `streaming_post_process` (`nemo/collections/asr/modules/conformer_encoder.py`); requires re-export and parity validation.
 
 ### Predictor
 - `pred_hidden`: `model_config.yaml` -> `model_defaults.pred_hidden` (640) and `decoder.prednet.pred_hidden`.
@@ -76,7 +76,7 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - `num_classes` (token vocab): `model_config.yaml` -> `joint.num_classes` (8192).
 - `duration_values`: `model_config.yaml` -> `model_defaults.tdt_durations` and `tools/export_onnx/out/model_meta.json`.
 - IO shapes: `docs/runtime_contract.md` and `tools/export_onnx/README.md`.
-- `joint_output` normalization: `tools/export_onnx/out/joint.onnx` (graph output is `LogSoftmax` with `axis=-1`).
+- `joint_output` normalization target: raw logits (export forces `joint.log_softmax=False` in `tools/export_onnx/export.py`; verify after re-export).
 
 ### Decode invariants (TDT)
 - Greedy decode algorithm (token argmax + duration argmax, advance time by duration): `docs/txt/2304.06795v2.txt` (Algorithm 2, page 5/23).
@@ -91,6 +91,8 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - TRT acceptance guidance: `TRT_INTEGRATION_CHECKLIST.md` and `ONNX_ORT_PARITY_README.md`.
 
 ## Provenance gaps to close
+- Re-export `joint.onnx` without `LogSoftmax` and verify output node is linear logits.
+- Re-export streaming encoder with stateful cache carryover and validate `cache_last_channel_len_out` behavior.
 - Resolve cache size mismatch: `last_channel_cache_size=10000` (NeMo config) vs `cache_size=256` (streaming export).
 - Decide blank + duration=0 handling policy for decode (paper allows renorm; runtime currently uses a heuristic).
 - Confirm predictor cell type (LSTM vs other) from NeMo modules.

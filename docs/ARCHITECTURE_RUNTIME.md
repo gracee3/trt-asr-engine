@@ -48,6 +48,7 @@ Single struct (per session) to carry all mutable state:
   - `cache_last_channel` [L, B, C, D]
   - `cache_last_time` [L, B, D, K]
   - `cache_last_channel_len` [B]
+  - Cache tensors are carried across chunks; `cache_last_channel_len` tracks valid cache depth.
 - Predictor state:
   - `h`/`c` [L, B, H]
 - Decode state:
@@ -65,6 +66,7 @@ Single struct (per session) to carry all mutable state:
 - Advance encoder time by duration (`duration_values[best_dur]`).
 - Guard: `max_symbols_per_timestep` to avoid infinite loops.
 - Blank + duration=0 must be handled per contract (disallow or override).
+- Joint output is exported as raw logits; apply per-head softmax only when probabilities are needed.
 
 ## FFI boundary
 - C ABI in `cpp/include/parakeet_trt.h`.

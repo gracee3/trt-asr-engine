@@ -109,6 +109,7 @@ These are the **exact ONNX graph IO names** and are expected to be preserved as 
   - Shape: `[B, T, U, V]`
   - Layout: `BTUV`
   - \(V=8198\) (from `model_meta.json` `joint_vocab_size`)
+  - Output is raw logits (no log-softmax); token and duration heads must be normalized independently if probabilities are required.
 
 ### Shape rules
 
@@ -150,5 +151,4 @@ python tools/build_trt/scripts/inspect_engine.py --engine models/parakeet-tdt-0.
 ```
 
 Then copy the printed binding table (or add a small script to parse `trtexec --verbose`) into this section and treat it as frozen for that engine build.
-
 

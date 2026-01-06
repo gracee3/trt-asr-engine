@@ -51,6 +51,7 @@ python -u export.py \
   --out ./out \
   --component encoder_streaming \
   --streaming-cache-size 256 \
+  --streaming-cache-drop-size 0 \
   --device cpu
 ```
 
@@ -106,6 +107,7 @@ python -u export.py \
 
 - Dynamic axes are enabled for the time/token dimensions unless `--fixed` is set.
 - The export writes `model_meta.json`, `vocab.txt` (if available), and best-effort `tokenizer.model`.
+- **Joint output is raw logits** (no log-softmax). Runtime should split token vs duration heads and apply per-head softmax only when probabilities are required.
 
 ## Validation
 After each export, `export.py` runs:
