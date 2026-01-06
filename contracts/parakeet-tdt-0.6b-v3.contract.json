@@ -1,0 +1,305 @@
+{
+  "model_id": "parakeet-tdt-0.6b-v3",
+  "model_family": "parakeet-tdt",
+  "model_version": "0.6b-v3",
+  "hashes": {
+    "nemo_sha256": "3cbdc85877e668ca7b82d0d56770eb1fac76691f55d6b97545e8d61ca588d10d",
+    "model_config_sha256": "eadae985ef97451402be2faef3b240c2cae7d9cc0362c5bd00e64dfc4265ed09",
+    "export_meta_sha256": "d3421f784ac920f2c6452916f7635ea2f0eb196471de31be1475712823537806"
+  },
+  "features": {
+    "type": "log-mel",
+    "sample_rate_hz": 16000,
+    "n_fft": 512,
+    "n_mels": 128,
+    "hop_length": 160,
+    "window_length": 400,
+    "window_size_sec": 0.025,
+    "window_stride_sec": 0.01,
+    "window": "hann",
+    "normalize": "per_feature",
+    "log": true,
+    "frame_splicing": 1,
+    "dither": 1.0e-05,
+    "pad_to": 0,
+    "pad_value": 0.0
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "model_path": "nemo:902810505b78491d95378fa3000d1bc6_tokenizer.model",
+    "vocab_path": "nemo:ddbad8f2a94d4186963950e53809d27f_vocab.txt",
+    "vocab_file": "models/parakeet-tdt-0.6b-v3/vocab.txt",
+    "vocab_size": 8192,
+    "blank_id": 8192,
+    "token_head_size": 8193,
+    "special_tokens": [
+      "<unk>",
+      "<|nospeech|>",
+      "<pad>",
+      "<|endoftext|>",
+      "<|startoftranscript|>"
+    ]
+  },
+  "encoder": {
+    "type": "ConformerEncoder",
+    "architecture": {
+      "num_layers": 24,
+      "d_model": 1024,
+      "n_heads": 8,
+      "conv_kernel_size": 9,
+      "subsampling_factor": 8,
+      "subsampling_conv_channels": 256,
+      "att_context_size": [-1, -1],
+      "att_context_style": "regular",
+      "pos_emb_max_len": 5000
+    },
+    "offline_io": {
+      "inputs": [
+        {
+          "name": "audio_signal",
+          "dtype": "float32",
+          "shape": ["B", 128, "T"],
+          "layout": "BCT"
+        },
+        {
+          "name": "length",
+          "dtype": "int64",
+          "shape": ["B"],
+          "layout": "B"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "encoder_output",
+          "dtype": "float32",
+          "shape": ["B", 1024, "T_enc"],
+          "layout": "BCT"
+        },
+        {
+          "name": "encoded_lengths",
+          "dtype": "int64",
+          "shape": ["B"],
+          "layout": "B"
+        }
+      ]
+    },
+    "streaming_io": {
+      "inputs": [
+        {
+          "name": "audio_signal",
+          "dtype": "float32",
+          "shape": ["B", 128, "T"],
+          "layout": "BCT"
+        },
+        {
+          "name": "length",
+          "dtype": "int64",
+          "shape": ["B"],
+          "layout": "B"
+        },
+        {
+          "name": "cache_last_channel",
+          "dtype": "float32",
+          "shape": [24, "B", 256, 1024]
+        },
+        {
+          "name": "cache_last_time",
+          "dtype": "float32",
+          "shape": [24, "B", 1024, 4]
+        },
+        {
+          "name": "cache_last_channel_len",
+          "dtype": "int64",
+          "shape": ["B"]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "encoder_output",
+          "dtype": "float32",
+          "shape": ["B", 1024, "T_out"],
+          "layout": "BCT"
+        },
+        {
+          "name": "encoded_lengths",
+          "dtype": "int64",
+          "shape": ["B"]
+        },
+        {
+          "name": "cache_last_channel_out",
+          "dtype": "float32",
+          "shape": [24, "B", "C_out", 1024]
+        },
+        {
+          "name": "cache_last_time_out",
+          "dtype": "float32",
+          "shape": [24, "B", 1024, "K_out"]
+        },
+        {
+          "name": "cache_last_channel_len_out",
+          "dtype": "int64",
+          "shape": ["B"]
+        }
+      ]
+    }
+  },
+  "predictor": {
+    "type": "RNNTDecoder",
+    "architecture": {
+      "pred_hidden": 640,
+      "pred_rnn_layers": 2,
+      "vocab_size": 8192,
+      "blank_as_pad": true
+    },
+    "io": {
+      "inputs": [
+        {
+          "name": "y",
+          "dtype": "int64",
+          "shape": ["B", "U"]
+        },
+        {
+          "name": "h",
+          "dtype": "float32",
+          "shape": [2, "B", 640]
+        },
+        {
+          "name": "c",
+          "dtype": "float32",
+          "shape": [2, "B", 640]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "g",
+          "dtype": "float32",
+          "shape": ["B", 640, "U"],
+          "layout": "BHU"
+        },
+        {
+          "name": "h_out",
+          "dtype": "float32",
+          "shape": [2, "B", 640]
+        },
+        {
+          "name": "c_out",
+          "dtype": "float32",
+          "shape": [2, "B", 640]
+        }
+      ]
+    }
+  },
+  "joint": {
+    "type": "RNNTJoint",
+    "architecture": {
+      "token_vocab_size": 8192,
+      "blank_id": 8192,
+      "token_head_size": 8193,
+      "duration_values": [0, 1, 2, 3, 4],
+      "joint_vocab_size": 8198
+    },
+    "io": {
+      "inputs": [
+        {
+          "name": "encoder_output",
+          "dtype": "float32",
+          "shape": ["B", 1024, "T"],
+          "layout": "BCT"
+        },
+        {
+          "name": "predictor_output",
+          "dtype": "float32",
+          "shape": ["B", 640, "U"],
+          "layout": "BHU"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "joint_output",
+          "dtype": "float32",
+          "shape": ["B", "T", "U", 8198],
+          "layout": "BTUV",
+          "token_head": {"offset": 0, "size": 8193},
+          "duration_head": {"offset": 8193, "size": 5}
+        }
+      ]
+    }
+  },
+  "decode": {
+    "algorithm": "tdt_greedy",
+    "token_head_order": "token_then_duration",
+    "blank_id": 8192,
+    "duration_values": [0, 1, 2, 3, 4],
+    "max_symbols_per_timestep": 8,
+    "blank_duration_zero_policy": "disallow_duration_0_for_blank",
+    "advance_time_rule": "advance_by_duration",
+    "emit_rule": "emit_if_token_is_nonblank"
+  },
+  "streaming": {
+    "mode": "chunk_isolated",
+    "valid_out_len": 1,
+    "cache_len_expected": 0,
+    "chunk_size": [577, 584],
+    "shift_size": [1, 8],
+    "cache_drop_size": 72,
+    "pre_encode_cache_size": [0, 9],
+    "drop_extra_pre_encoded": 2,
+    "cache": {
+      "last_channel_size": 256,
+      "time_context_size": 4,
+      "nemo_last_channel_cache_size": 10000
+    }
+  },
+  "trt": {
+    "precision": {
+      "baseline": "fp32",
+      "target": "fp16"
+    },
+    "profiles": {
+      "encoder": {
+        "min": {"audio_signal": [1, 128, 16], "length": [1]},
+        "opt": {"audio_signal": [1, 128, 64], "length": [1]},
+        "max": {"audio_signal": [1, 128, 256], "length": [1]}
+      },
+      "predictor": {
+        "min": {"y": [1, 1], "h": [2, 1, 640], "c": [2, 1, 640]},
+        "opt": {"y": [1, 1], "h": [2, 1, 640], "c": [2, 1, 640]},
+        "max": {"y": [1, 8], "h": [2, 1, 640], "c": [2, 1, 640]}
+      },
+      "joint": {
+        "min": {"encoder_output": [1, 1024, 16], "predictor_output": [1, 640, 1]},
+        "opt": {"encoder_output": [1, 1024, 64], "predictor_output": [1, 640, 1]},
+        "max": {"encoder_output": [1, 1024, 256], "predictor_output": [1, 640, 8]}
+      },
+      "encoder_streaming": [
+        {
+          "name": "streaming_profile_592",
+          "audio_signal_T": {"min": 592, "opt": 592, "max": 592},
+          "batch": {"min": 1, "opt": 1, "max": 1}
+        },
+        {
+          "name": "streaming_profile_584",
+          "audio_signal_T": {"min": 584, "opt": 584, "max": 584},
+          "batch": {"min": 1, "opt": 1, "max": 1}
+        },
+        {
+          "name": "unified_profile",
+          "audio_signal_T": {"min": 584, "opt": 592, "max": 592},
+          "batch": {"min": 1, "opt": 1, "max": 8}
+        }
+      ]
+    },
+    "tolerances": {
+      "ort": {
+        "default_atol": 1.0e-04,
+        "default_rtol": 1.0e-04,
+        "cache_last_time_atol": 0.1
+      },
+      "trt": {
+        "encoder_output_p95_max_abs": 5.0e-04,
+        "encoder_output_p100_max_abs": 1.0e-03,
+        "fp16_encoder_output_p95_max_abs": 1.8e-03
+      }
+    }
+  }
+}

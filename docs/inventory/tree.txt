@@ -1,0 +1,1259 @@
+.
+├── AGENT_SETUP_GUIDE.md
+├── apps
+│   └── trt_runtime_smoke
+│       ├── CMakeLists.txt
+│       ├── main.cpp
+│       └── README.md
+├── artifacts
+│   ├── diagnostics
+│   │   ├── cache_time_diagnostic.json
+│   │   └── streaming_cache_200.jsonl
+│   ├── parity
+│   │   ├── parity_50chunks_closedloop_cpu.json
+│   │   ├── parity_50chunks_closedloop_cuda.json
+│   │   ├── parity_50chunks_functional_cpu.json
+│   │   ├── parity_50chunks_functional_cuda.json
+│   │   ├── trt_parity_300chunks_closedloop_fp16.json
+│   │   ├── trt_parity_300chunks_closedloop.json
+│   │   ├── trt_parity_50chunks_closedloop.json
+│   │   ├── trt_parity_50chunks_functional_fp16.json
+│   │   └── trt_parity_50chunks_functional.json
+│   ├── reference
+│   │   ├── pytorch_reference_300.jsonl
+│   │   └── pytorch_reference_50.jsonl
+│   └── stability
+│       ├── trt_stability_300chunks_fp16.png
+│       └── trt_stability_300chunks.png
+├── audit_model_arch.json
+├── \200\256\357\310\004b
+├── CACHE_TIME_ROOT_CAUSE_ANALYSIS.md
+├── contracts
+│   └── encoder_streaming.contract.json
+├── CONTRIBUTING.md
+├── cpp
+│   ├── build
+│   │   ├── CMakeCache.txt
+│   │   ├── CMakeFiles
+│   │   │   ├── 3.28.3
+│   │   │   │   ├── CMakeCCompiler.cmake
+│   │   │   │   ├── CMakeCXXCompiler.cmake
+│   │   │   │   ├── CMakeDetermineCompilerABI_C.bin
+│   │   │   │   ├── CMakeDetermineCompilerABI_CXX.bin
+│   │   │   │   ├── CMakeSystem.cmake
+│   │   │   │   ├── CompilerIdC
+│   │   │   │   └── CompilerIdCXX
+│   │   │   ├── cmake.check_cache
+│   │   │   ├── CMakeConfigureLog.yaml
+│   │   │   ├── CMakeDirectoryInformation.cmake
+│   │   │   ├── greedy_decode_smoke.dir
+│   │   │   │   ├── build.make
+│   │   │   │   ├── cmake_clean.cmake
+│   │   │   │   ├── compiler_depend.internal
+│   │   │   │   ├── compiler_depend.make
+│   │   │   │   ├── compiler_depend.ts
+│   │   │   │   ├── DependInfo.cmake
+│   │   │   │   ├── depend.make
+│   │   │   │   ├── flags.make
+│   │   │   │   ├── link.txt
+│   │   │   │   ├── progress.make
+│   │   │   │   └── src
+│   │   │   ├── Makefile2
+│   │   │   ├── Makefile.cmake
+│   │   │   ├── parakeet_trt.dir
+│   │   │   │   ├── build.make
+│   │   │   │   ├── cmake_clean.cmake
+│   │   │   │   ├── compiler_depend.internal
+│   │   │   │   ├── compiler_depend.make
+│   │   │   │   ├── compiler_depend.ts
+│   │   │   │   ├── DependInfo.cmake
+│   │   │   │   ├── depend.make
+│   │   │   │   ├── flags.make
+│   │   │   │   ├── link.txt
+│   │   │   │   ├── progress.make
+│   │   │   │   └── src
+│   │   │   ├── pkgRedirects
+│   │   │   ├── progress.marks
+│   │   │   └── TargetDirectories.txt
+│   │   ├── cmake_install.cmake
+│   │   ├── greedy_decode_smoke
+│   │   ├── libparakeet_trt.so
+│   │   └── Makefile
+│   ├── CMakeLists.txt
+│   ├── include
+│   │   ├── audio_tap.h
+│   │   ├── parakeet_trt.h
+│   │   └── trt_asr.h
+│   └── src
+│       ├── decoder.cpp
+│       ├── decoder.h
+│       ├── engine_manager.cpp
+│       ├── engine_manager.h
+│       ├── greedy_decode_smoke.cpp
+│       ├── greedy_rnnt.h
+│       ├── mock_lib.cpp
+│       ├── parakeet_trt.cpp
+│       ├── tokenizer.cpp
+│       ├── tokenizer.h
+│       └── trt_asr.cpp
+├── debug_artifacts
+├── docs
+│   ├── ci_runner.md
+│   ├── debugging.md
+│   ├── inventory
+│   │   └── tree.txt
+│   ├── runtime_contract.md
+│   └── txt
+│       ├── 2304.06795v2.txt
+│       ├── 2305.05084v6.txt
+│       └── 2312.17279v3.txt
+├── LICENSE
+├── MAGNOLIA_INTEGRATION_HANDOFF.md
+├── models
+│   └── parakeet-tdt-0.6b-v3
+│       ├── build_logs
+│       │   ├── encoder.log
+│       │   ├── encoder_smoke.log
+│       │   ├── joint.log
+│       │   ├── joint_smoke.log
+│       │   ├── predictor.log
+│       │   └── predictor_smoke.log
+│       ├── build_report.json
+│       ├── encoder.engine
+│       ├── joint.engine
+│       ├── parakeet-tdt-0.6b-v3.nemo
+│       ├── predictor.engine
+│       ├── timing.cache
+│       ├── timing.cache.lock
+│       └── vocab.txt
+├── ONNX_ORT_PARITY_README.md
+├── ONNX_PARITY_RESULTS.md
+├── out
+│   ├── Constant_2991_attr__value
+│   ├── encoder.layers.0.conv.pointwise_conv1.weight
+│   ├── encoder.layers.0.conv.pointwise_conv2.weight
+│   ├── encoder.layers.10.conv.pointwise_conv1.weight
+│   ├── encoder.layers.10.conv.pointwise_conv2.weight
+│   ├── encoder.layers.11.conv.pointwise_conv1.weight
+│   ├── encoder.layers.11.conv.pointwise_conv2.weight
+│   ├── encoder.layers.12.conv.pointwise_conv1.weight
+│   ├── encoder.layers.12.conv.pointwise_conv2.weight
+│   ├── encoder.layers.13.conv.pointwise_conv1.weight
+│   ├── encoder.layers.13.conv.pointwise_conv2.weight
+│   ├── encoder.layers.14.conv.pointwise_conv1.weight
+│   ├── encoder.layers.14.conv.pointwise_conv2.weight
+│   ├── encoder.layers.15.conv.pointwise_conv1.weight
+│   ├── encoder.layers.15.conv.pointwise_conv2.weight
+│   ├── encoder.layers.16.conv.pointwise_conv1.weight
+│   ├── encoder.layers.16.conv.pointwise_conv2.weight
+│   ├── encoder.layers.17.conv.pointwise_conv1.weight
+│   ├── encoder.layers.17.conv.pointwise_conv2.weight
+│   ├── encoder.layers.18.conv.pointwise_conv1.weight
+│   ├── encoder.layers.18.conv.pointwise_conv2.weight
+│   ├── encoder.layers.19.conv.pointwise_conv1.weight
+│   ├── encoder.layers.19.conv.pointwise_conv2.weight
+│   ├── encoder.layers.1.conv.pointwise_conv1.weight
+│   ├── encoder.layers.1.conv.pointwise_conv2.weight
+│   ├── encoder.layers.20.conv.pointwise_conv1.weight
+│   ├── encoder.layers.20.conv.pointwise_conv2.weight
+│   ├── encoder.layers.21.conv.pointwise_conv1.weight
+│   ├── encoder.layers.21.conv.pointwise_conv2.weight
+│   ├── encoder.layers.22.conv.pointwise_conv1.weight
+│   ├── encoder.layers.22.conv.pointwise_conv2.weight
+│   ├── encoder.layers.23.conv.pointwise_conv1.weight
+│   ├── encoder.layers.23.conv.pointwise_conv2.weight
+│   ├── encoder.layers.2.conv.pointwise_conv1.weight
+│   ├── encoder.layers.2.conv.pointwise_conv2.weight
+│   ├── encoder.layers.3.conv.pointwise_conv1.weight
+│   ├── encoder.layers.3.conv.pointwise_conv2.weight
+│   ├── encoder.layers.4.conv.pointwise_conv1.weight
+│   ├── encoder.layers.4.conv.pointwise_conv2.weight
+│   ├── encoder.layers.5.conv.pointwise_conv1.weight
+│   ├── encoder.layers.5.conv.pointwise_conv2.weight
+│   ├── encoder.layers.6.conv.pointwise_conv1.weight
+│   ├── encoder.layers.6.conv.pointwise_conv2.weight
+│   ├── encoder.layers.7.conv.pointwise_conv1.weight
+│   ├── encoder.layers.7.conv.pointwise_conv2.weight
+│   ├── encoder.layers.8.conv.pointwise_conv1.weight
+│   ├── encoder.layers.8.conv.pointwise_conv2.weight
+│   ├── encoder.layers.9.conv.pointwise_conv1.weight
+│   ├── encoder.layers.9.conv.pointwise_conv2.weight
+│   ├── encoder.pre_encode.conv.0.weight
+│   ├── encoder.pre_encode.conv.2.weight
+│   ├── encoder.pre_encode.conv.3.weight
+│   ├── encoder.pre_encode.conv.5.weight
+│   ├── encoder.pre_encode.conv.6.weight
+│   ├── encoder_streaming.onnx
+│   ├── model_meta.json
+│   ├── onnx__Conv_8267
+│   ├── onnx__Conv_8270
+│   ├── onnx__Conv_8273
+│   ├── onnx__Conv_8276
+│   ├── onnx__Conv_8279
+│   ├── onnx__Conv_8282
+│   ├── onnx__Conv_8285
+│   ├── onnx__Conv_8288
+│   ├── onnx__Conv_8291
+│   ├── onnx__Conv_8294
+│   ├── onnx__Conv_8297
+│   ├── onnx__Conv_8300
+│   ├── onnx__Conv_8303
+│   ├── onnx__Conv_8306
+│   ├── onnx__Conv_8309
+│   ├── onnx__Conv_8312
+│   ├── onnx__Conv_8315
+│   ├── onnx__Conv_8318
+│   ├── onnx__Conv_8321
+│   ├── onnx__Conv_8324
+│   ├── onnx__Conv_8327
+│   ├── onnx__Conv_8330
+│   ├── onnx__Conv_8333
+│   ├── onnx__Conv_8336
+│   ├── onnx__MatMul_8339
+│   ├── onnx__MatMul_8369
+│   ├── onnx__MatMul_8370
+│   ├── onnx__MatMul_8377
+│   ├── onnx__MatMul_8387
+│   ├── onnx__MatMul_8388
+│   ├── onnx__MatMul_8389
+│   ├── onnx__MatMul_8477
+│   ├── onnx__MatMul_8490
+│   ├── onnx__MatMul_8491
+│   ├── onnx__MatMul_8492
+│   ├── onnx__MatMul_8493
+│   ├── onnx__MatMul_8500
+│   ├── onnx__MatMul_8510
+│   ├── onnx__MatMul_8511
+│   ├── onnx__MatMul_8512
+│   ├── onnx__MatMul_8528
+│   ├── onnx__MatMul_8541
+│   ├── onnx__MatMul_8542
+│   ├── onnx__MatMul_8543
+│   ├── onnx__MatMul_8544
+│   ├── onnx__MatMul_8551
+│   ├── onnx__MatMul_8561
+│   ├── onnx__MatMul_8562
+│   ├── onnx__MatMul_8563
+│   ├── onnx__MatMul_8579
+│   ├── onnx__MatMul_8592
+│   ├── onnx__MatMul_8593
+│   ├── onnx__MatMul_8594
+│   ├── onnx__MatMul_8595
+│   ├── onnx__MatMul_8602
+│   ├── onnx__MatMul_8612
+│   ├── onnx__MatMul_8613
+│   ├── onnx__MatMul_8614
+│   ├── onnx__MatMul_8630
+│   ├── onnx__MatMul_8643
+│   ├── onnx__MatMul_8644
+│   ├── onnx__MatMul_8645
+│   ├── onnx__MatMul_8646
+│   ├── onnx__MatMul_8653
+│   ├── onnx__MatMul_8663
+│   ├── onnx__MatMul_8664
+│   ├── onnx__MatMul_8665
+│   ├── onnx__MatMul_8681
+│   ├── onnx__MatMul_8694
+│   ├── onnx__MatMul_8695
+│   ├── onnx__MatMul_8696
+│   ├── onnx__MatMul_8697
+│   ├── onnx__MatMul_8704
+│   ├── onnx__MatMul_8714
+│   ├── onnx__MatMul_8715
+│   ├── onnx__MatMul_8716
+│   ├── onnx__MatMul_8732
+│   ├── onnx__MatMul_8745
+│   ├── onnx__MatMul_8746
+│   ├── onnx__MatMul_8747
+│   ├── onnx__MatMul_8748
+│   ├── onnx__MatMul_8755
+│   ├── onnx__MatMul_8765
+│   ├── onnx__MatMul_8766
+│   ├── onnx__MatMul_8767
+│   ├── onnx__MatMul_8783
+│   ├── onnx__MatMul_8796
+│   ├── onnx__MatMul_8797
+│   ├── onnx__MatMul_8798
+│   ├── onnx__MatMul_8799
+│   ├── onnx__MatMul_8806
+│   ├── onnx__MatMul_8816
+│   ├── onnx__MatMul_8817
+│   ├── onnx__MatMul_8818
+│   ├── onnx__MatMul_8834
+│   ├── onnx__MatMul_8847
+│   ├── onnx__MatMul_8848
+│   ├── onnx__MatMul_8849
+│   ├── onnx__MatMul_8850
+│   ├── onnx__MatMul_8857
+│   ├── onnx__MatMul_8867
+│   ├── onnx__MatMul_8868
+│   ├── onnx__MatMul_8869
+│   ├── onnx__MatMul_8885
+│   ├── onnx__MatMul_8898
+│   ├── onnx__MatMul_8899
+│   ├── onnx__MatMul_8900
+│   ├── onnx__MatMul_8901
+│   ├── onnx__MatMul_8908
+│   ├── onnx__MatMul_8918
+│   ├── onnx__MatMul_8919
+│   ├── onnx__MatMul_8920
+│   ├── onnx__MatMul_8936
+│   ├── onnx__MatMul_8949
+│   ├── onnx__MatMul_8950
+│   ├── onnx__MatMul_8951
+│   ├── onnx__MatMul_8952
+│   ├── onnx__MatMul_8959
+│   ├── onnx__MatMul_8969
+│   ├── onnx__MatMul_8970
+│   ├── onnx__MatMul_8971
+│   ├── onnx__MatMul_8987
+│   ├── onnx__MatMul_9000
+│   ├── onnx__MatMul_9001
+│   ├── onnx__MatMul_9002
+│   ├── onnx__MatMul_9003
+│   ├── onnx__MatMul_9010
+│   ├── onnx__MatMul_9020
+│   ├── onnx__MatMul_9021
+│   ├── onnx__MatMul_9022
+│   ├── onnx__MatMul_9038
+│   ├── onnx__MatMul_9051
+│   ├── onnx__MatMul_9052
+│   ├── onnx__MatMul_9053
+│   ├── onnx__MatMul_9054
+│   ├── onnx__MatMul_9061
+│   ├── onnx__MatMul_9071
+│   ├── onnx__MatMul_9072
+│   ├── onnx__MatMul_9073
+│   ├── onnx__MatMul_9089
+│   ├── onnx__MatMul_9102
+│   ├── onnx__MatMul_9103
+│   ├── onnx__MatMul_9104
+│   ├── onnx__MatMul_9105
+│   ├── onnx__MatMul_9112
+│   ├── onnx__MatMul_9122
+│   ├── onnx__MatMul_9123
+│   ├── onnx__MatMul_9124
+│   ├── onnx__MatMul_9140
+│   ├── onnx__MatMul_9153
+│   ├── onnx__MatMul_9154
+│   ├── onnx__MatMul_9155
+│   ├── onnx__MatMul_9156
+│   ├── onnx__MatMul_9163
+│   ├── onnx__MatMul_9173
+│   ├── onnx__MatMul_9174
+│   ├── onnx__MatMul_9175
+│   ├── onnx__MatMul_9191
+│   ├── onnx__MatMul_9204
+│   ├── onnx__MatMul_9205
+│   ├── onnx__MatMul_9206
+│   ├── onnx__MatMul_9207
+│   ├── onnx__MatMul_9214
+│   ├── onnx__MatMul_9224
+│   ├── onnx__MatMul_9225
+│   ├── onnx__MatMul_9226
+│   ├── onnx__MatMul_9242
+│   ├── onnx__MatMul_9255
+│   ├── onnx__MatMul_9256
+│   ├── onnx__MatMul_9257
+│   ├── onnx__MatMul_9258
+│   ├── onnx__MatMul_9265
+│   ├── onnx__MatMul_9275
+│   ├── onnx__MatMul_9276
+│   ├── onnx__MatMul_9277
+│   ├── onnx__MatMul_9293
+│   ├── onnx__MatMul_9306
+│   ├── onnx__MatMul_9307
+│   ├── onnx__MatMul_9308
+│   ├── onnx__MatMul_9309
+│   ├── onnx__MatMul_9316
+│   ├── onnx__MatMul_9326
+│   ├── onnx__MatMul_9327
+│   ├── onnx__MatMul_9328
+│   ├── onnx__MatMul_9344
+│   ├── onnx__MatMul_9357
+│   ├── onnx__MatMul_9358
+│   ├── onnx__MatMul_9359
+│   ├── onnx__MatMul_9360
+│   ├── onnx__MatMul_9367
+│   ├── onnx__MatMul_9377
+│   ├── onnx__MatMul_9378
+│   ├── onnx__MatMul_9379
+│   ├── onnx__MatMul_9395
+│   ├── onnx__MatMul_9408
+│   ├── onnx__MatMul_9409
+│   ├── onnx__MatMul_9410
+│   ├── onnx__MatMul_9411
+│   ├── onnx__MatMul_9418
+│   ├── onnx__MatMul_9428
+│   ├── onnx__MatMul_9429
+│   ├── onnx__MatMul_9430
+│   ├── onnx__MatMul_9446
+│   ├── onnx__MatMul_9459
+│   ├── onnx__MatMul_9460
+│   ├── onnx__MatMul_9461
+│   ├── onnx__MatMul_9462
+│   ├── onnx__MatMul_9469
+│   ├── onnx__MatMul_9479
+│   ├── onnx__MatMul_9480
+│   ├── onnx__MatMul_9481
+│   ├── onnx__MatMul_9497
+│   ├── onnx__MatMul_9510
+│   ├── onnx__MatMul_9511
+│   ├── onnx__MatMul_9512
+│   ├── onnx__MatMul_9513
+│   ├── onnx__MatMul_9520
+│   ├── onnx__MatMul_9530
+│   ├── onnx__MatMul_9531
+│   ├── onnx__MatMul_9532
+│   ├── onnx__MatMul_9548
+│   ├── onnx__MatMul_9561
+│   ├── onnx__MatMul_9562
+│   ├── onnx__MatMul_9563
+│   ├── onnx__MatMul_9564
+│   ├── onnx__MatMul_9571
+│   ├── onnx__MatMul_9581
+│   ├── onnx__MatMul_9582
+│   ├── onnx__MatMul_9583
+│   ├── onnx__MatMul_9599
+│   ├── onnx__MatMul_9612
+│   ├── onnx__MatMul_9613
+│   ├── onnx__MatMul_9614
+│   ├── onnx__MatMul_9615
+│   ├── onnx__MatMul_9622
+│   ├── onnx__MatMul_9632
+│   ├── onnx__MatMul_9633
+│   ├── onnx__MatMul_9634
+│   ├── onnx__MatMul_9650
+│   ├── onnx__MatMul_9663
+│   ├── onnx__MatMul_9664
+│   ├── tokenizer.model
+│   └── trt_engines
+│       ├── build_log.txt
+│       ├── encoder_streaming_fp16.plan
+│       └── encoder_streaming_fp32.plan
+├── README.md
+├── rust
+│   ├── Cargo.lock
+│   ├── Cargo.toml
+│   ├── cli
+│   │   ├── Cargo.toml
+│   │   └── src
+│   │       └── main.rs
+│   ├── features
+│   │   ├── Cargo.toml
+│   │   └── src
+│   │       └── lib.rs
+│   ├── parakeet_trt
+│   │   ├── Cargo.toml
+│   │   └── src
+│   │       └── lib.rs
+│   ├── parakeet_trt_sys
+│   │   ├── build.rs
+│   │   ├── Cargo.toml
+│   │   └── src
+│   │       └── lib.rs
+│   └── target
+│       ├── CACHEDIR.TAG
+│       ├── debug
+│       │   ├── build
+│       │   │   ├── anyhow-51833f0978f26e01
+│       │   │   ├── anyhow-c5854af5c83bad73
+│       │   │   ├── bindgen-2543b5d2e4be9c98
+│       │   │   ├── bindgen-2774b569b323c71b
+│       │   │   ├── clang-sys-7939eb7219d0d9c6
+│       │   │   ├── clang-sys-8c42fad2e09f877b
+│       │   │   ├── libc-032ab6850e0d0dee
+│       │   │   ├── libc-16cba0b36b7660ca
+│       │   │   ├── libc-70cedf12a68e4677
+│       │   │   ├── libc-da512cb131adb937
+│       │   │   ├── matrixmultiply-2e3c63b8dd1a36e3
+│       │   │   ├── matrixmultiply-eb55ba606d7cfce3
+│       │   │   ├── num-traits-d11cf242cc253b99
+│       │   │   ├── num-traits-d19a2680fdb53957
+│       │   │   ├── parakeet_trt_sys-0e91dd87e3cca24e
+│       │   │   ├── parakeet_trt_sys-2f4665d4b4eded47
+│       │   │   ├── parakeet_trt_sys-2fa14b41be24be75
+│       │   │   ├── parakeet_trt_sys-53a569ccf042b825
+│       │   │   ├── parakeet_trt_sys-c9fd8f39cdea6b5c
+│       │   │   ├── parakeet_trt_sys-eb832ce5a18c8604
+│       │   │   ├── parking_lot_core-87dd772e8d5a1ed4
+│       │   │   ├── parking_lot_core-98919fa8a0f2855d
+│       │   │   ├── prettyplease-14de2fd878d5e7fc
+│       │   │   ├── prettyplease-69fa5ef9d0e580db
+│       │   │   ├── proc-macro2-05a90fbf89d02d99
+│       │   │   ├── proc-macro2-13657e808e4554e6
+│       │   │   ├── proc-macro2-3d58f8ca9e6bae77
+│       │   │   ├── proc-macro2-d133868faabcb76b
+│       │   │   ├── quote-43af53805903a4de
+│       │   │   ├── quote-77073a4e4b8f6237
+│       │   │   ├── quote-ac667f50521aed49
+│       │   │   ├── quote-f1c9b1dc7126ab38
+│       │   │   ├── rustix-4b0acb449ce5f718
+│       │   │   ├── rustix-cde8b27c2ed61595
+│       │   │   ├── serde_core-784de185723d067d
+│       │   │   ├── serde_core-bc8da28f52ebc7db
+│       │   │   ├── serde_json-151a691ad9128b16
+│       │   │   ├── serde_json-54e2fc0f1e23a565
+│       │   │   ├── thiserror-01289695c6f27cd2
+│       │   │   ├── thiserror-2693a2cf04d4d799
+│       │   │   ├── zmij-591e3b5adf42551a
+│       │   │   └── zmij-771bbf70a1cd8af0
+│       │   ├── cli
+│       │   ├── cli.d
+│       │   ├── deps
+│       │   │   ├── anstream-4ed5b3aeb8552f47.d
+│       │   │   ├── anstream-62520e4c452bdb39.d
+│       │   │   ├── anstyle-2fc24251f522c11c.d
+│       │   │   ├── anstyle-d068366c97dda582.d
+│       │   │   ├── anstyle_parse-1718bf65f6a335f6.d
+│       │   │   ├── anstyle_parse-40330a4e93aaa149.d
+│       │   │   ├── anstyle_query-6bc78d2609fb12de.d
+│       │   │   ├── anstyle_query-a76b992e968c3e33.d
+│       │   │   ├── anyhow-18003d9b3bf5fec2.d
+│       │   │   ├── anyhow-5507866cbcf9167e.d
+│       │   │   ├── autocfg-2baaa58c24c54262.d
+│       │   │   ├── bindgen-289ef621dd142743.d
+│       │   │   ├── bindgen-2f6950a9f532bdab.d
+│       │   │   ├── bindgen-f3c51c98fc7c521a.d
+│       │   │   ├── bitflags-035f90002395406e.d
+│       │   │   ├── bytes-510667a8089da4fe.d
+│       │   │   ├── bytes-72be4f06be751943.d
+│       │   │   ├── cexpr-1ddec03e073c051c.d
+│       │   │   ├── cexpr-da7853ca185676c4.d
+│       │   │   ├── cfg_if-8a61fb9a152698a3.d
+│       │   │   ├── cfg_if-b2fae9762dd914dd.d
+│       │   │   ├── cfg_if-fa2358db2036de85.d
+│       │   │   ├── clang_sys-57bccf30634a2827.d
+│       │   │   ├── clang_sys-d1d416f0b869b704.d
+│       │   │   ├── clap-7e2fba635dcb824a.d
+│       │   │   ├── clap-b6c3da3505ce597f.d
+│       │   │   ├── clap_builder-72df496f41fa2de9.d
+│       │   │   ├── clap_builder-dd224bd1f4b0cad5.d
+│       │   │   ├── clap_derive-0f9e6780c2d0192e.d
+│       │   │   ├── clap_lex-14a6d2238224627a.d
+│       │   │   ├── clap_lex-4ecf5dd869f540dd.d
+│       │   │   ├── cli-02bac0270d3c9639.d
+│       │   │   ├── cli-2dda77d0fce7b0b5
+│       │   │   ├── cli-2dda77d0fce7b0b5.d
+│       │   │   ├── cli-f82e2a76259235ee.d
+│       │   │   ├── colorchoice-0bab99ec3f8cc198.d
+│       │   │   ├── colorchoice-a8fdc16a2042d98c.d
+│       │   │   ├── either-a739d0aa2357b524.d
+│       │   │   ├── errno-0d84443064a54eb0.d
+│       │   │   ├── errno-3b4a5eb7cf2b40f9.d
+│       │   │   ├── features-0836db3ce18d9441.d
+│       │   │   ├── features-98390c1f51ed0e13.d
+│       │   │   ├── features-c288f9ae7a4297aa.d
+│       │   │   ├── glob-83fda3ebebbdef81.d
+│       │   │   ├── heck-f38127f984e7105d.d
+│       │   │   ├── home-cfda3e373306c319.d
+│       │   │   ├── hound-32045e40fd648ca4.d
+│       │   │   ├── hound-42138271ae8da3eb.d
+│       │   │   ├── is_terminal_polyfill-2d093d569698e208.d
+│       │   │   ├── is_terminal_polyfill-2f98b869545b7874.d
+│       │   │   ├── itertools-d14ad4174de87580.d
+│       │   │   ├── itoa-0e1cce560ff1fe2c.d
+│       │   │   ├── itoa-ff3a5edccd7967a9.d
+│       │   │   ├── lazycell-d53a694dd3c301f4.d
+│       │   │   ├── lazy_static-3cef8f92fe739dae.d
+│       │   │   ├── libanstream-4ed5b3aeb8552f47.rmeta
+│       │   │   ├── libanstream-62520e4c452bdb39.rlib
+│       │   │   ├── libanstream-62520e4c452bdb39.rmeta
+│       │   │   ├── libanstyle-2fc24251f522c11c.rlib
+│       │   │   ├── libanstyle-2fc24251f522c11c.rmeta
+│       │   │   ├── libanstyle-d068366c97dda582.rmeta
+│       │   │   ├── libanstyle_parse-1718bf65f6a335f6.rlib
+│       │   │   ├── libanstyle_parse-1718bf65f6a335f6.rmeta
+│       │   │   ├── libanstyle_parse-40330a4e93aaa149.rmeta
+│       │   │   ├── libanstyle_query-6bc78d2609fb12de.rmeta
+│       │   │   ├── libanstyle_query-a76b992e968c3e33.rlib
+│       │   │   ├── libanstyle_query-a76b992e968c3e33.rmeta
+│       │   │   ├── libanyhow-18003d9b3bf5fec2.rlib
+│       │   │   ├── libanyhow-18003d9b3bf5fec2.rmeta
+│       │   │   ├── libanyhow-5507866cbcf9167e.rmeta
+│       │   │   ├── libautocfg-2baaa58c24c54262.rlib
+│       │   │   ├── libautocfg-2baaa58c24c54262.rmeta
+│       │   │   ├── libbindgen-289ef621dd142743.rlib
+│       │   │   ├── libbindgen-289ef621dd142743.rmeta
+│       │   │   ├── libbindgen-2f6950a9f532bdab.rlib
+│       │   │   ├── libbindgen-2f6950a9f532bdab.rmeta
+│       │   │   ├── libbindgen-f3c51c98fc7c521a.rlib
+│       │   │   ├── libbindgen-f3c51c98fc7c521a.rmeta
+│       │   │   ├── libbitflags-035f90002395406e.rlib
+│       │   │   ├── libbitflags-035f90002395406e.rmeta
+│       │   │   ├── libbytes-510667a8089da4fe.rlib
+│       │   │   ├── libbytes-510667a8089da4fe.rmeta
+│       │   │   ├── libbytes-72be4f06be751943.rmeta
+│       │   │   ├── libc-09b99f4db6a038eb.d
+│       │   │   ├── libc-9067ec6747c7515d.d
+│       │   │   ├── libc-ca935c94f6e56eb5.d
+│       │   │   ├── libcexpr-1ddec03e073c051c.rlib
+│       │   │   ├── libcexpr-1ddec03e073c051c.rmeta
+│       │   │   ├── libcexpr-da7853ca185676c4.rlib
+│       │   │   ├── libcexpr-da7853ca185676c4.rmeta
+│       │   │   ├── libcfg_if-8a61fb9a152698a3.rmeta
+│       │   │   ├── libcfg_if-b2fae9762dd914dd.rlib
+│       │   │   ├── libcfg_if-b2fae9762dd914dd.rmeta
+│       │   │   ├── libcfg_if-fa2358db2036de85.rlib
+│       │   │   ├── libcfg_if-fa2358db2036de85.rmeta
+│       │   │   ├── libclang_sys-57bccf30634a2827.rlib
+│       │   │   ├── libclang_sys-57bccf30634a2827.rmeta
+│       │   │   ├── libclang_sys-d1d416f0b869b704.rlib
+│       │   │   ├── libclang_sys-d1d416f0b869b704.rmeta
+│       │   │   ├── libclap-7e2fba635dcb824a.rmeta
+│       │   │   ├── libclap-b6c3da3505ce597f.rlib
+│       │   │   ├── libclap-b6c3da3505ce597f.rmeta
+│       │   │   ├── libclap_builder-72df496f41fa2de9.rlib
+│       │   │   ├── libclap_builder-72df496f41fa2de9.rmeta
+│       │   │   ├── libclap_builder-dd224bd1f4b0cad5.rmeta
+│       │   │   ├── libclap_derive-0f9e6780c2d0192e.so
+│       │   │   ├── libclap_lex-14a6d2238224627a.rlib
+│       │   │   ├── libclap_lex-14a6d2238224627a.rmeta
+│       │   │   ├── libclap_lex-4ecf5dd869f540dd.rmeta
+│       │   │   ├── libcli-02bac0270d3c9639.rmeta
+│       │   │   ├── libcli-f82e2a76259235ee.rmeta
+│       │   │   ├── libcolorchoice-0bab99ec3f8cc198.rmeta
+│       │   │   ├── libcolorchoice-a8fdc16a2042d98c.rlib
+│       │   │   ├── libcolorchoice-a8fdc16a2042d98c.rmeta
+│       │   │   ├── libeither-a739d0aa2357b524.rlib
+│       │   │   ├── libeither-a739d0aa2357b524.rmeta
+│       │   │   ├── liberrno-0d84443064a54eb0.rmeta
+│       │   │   ├── liberrno-3b4a5eb7cf2b40f9.rlib
+│       │   │   ├── liberrno-3b4a5eb7cf2b40f9.rmeta
+│       │   │   ├── libfeatures-0836db3ce18d9441.rmeta
+│       │   │   ├── libfeatures-98390c1f51ed0e13.rmeta
+│       │   │   ├── libfeatures-c288f9ae7a4297aa.rlib
+│       │   │   ├── libfeatures-c288f9ae7a4297aa.rmeta
+│       │   │   ├── libglob-83fda3ebebbdef81.rlib
+│       │   │   ├── libglob-83fda3ebebbdef81.rmeta
+│       │   │   ├── libheck-f38127f984e7105d.rlib
+│       │   │   ├── libheck-f38127f984e7105d.rmeta
+│       │   │   ├── libhome-cfda3e373306c319.rlib
+│       │   │   ├── libhome-cfda3e373306c319.rmeta
+│       │   │   ├── libhound-32045e40fd648ca4.rlib
+│       │   │   ├── libhound-32045e40fd648ca4.rmeta
+│       │   │   ├── libhound-42138271ae8da3eb.rmeta
+│       │   │   ├── libis_terminal_polyfill-2d093d569698e208.rmeta
+│       │   │   ├── libis_terminal_polyfill-2f98b869545b7874.rlib
+│       │   │   ├── libis_terminal_polyfill-2f98b869545b7874.rmeta
+│       │   │   ├── libitertools-d14ad4174de87580.rlib
+│       │   │   ├── libitertools-d14ad4174de87580.rmeta
+│       │   │   ├── libitoa-0e1cce560ff1fe2c.rlib
+│       │   │   ├── libitoa-0e1cce560ff1fe2c.rmeta
+│       │   │   ├── libitoa-ff3a5edccd7967a9.rmeta
+│       │   │   ├── liblazycell-d53a694dd3c301f4.rlib
+│       │   │   ├── liblazycell-d53a694dd3c301f4.rmeta
+│       │   │   ├── liblazy_static-3cef8f92fe739dae.rlib
+│       │   │   ├── liblazy_static-3cef8f92fe739dae.rmeta
+│       │   │   ├── liblibc-09b99f4db6a038eb.rlib
+│       │   │   ├── liblibc-09b99f4db6a038eb.rmeta
+│       │   │   ├── liblibc-9067ec6747c7515d.rlib
+│       │   │   ├── liblibc-9067ec6747c7515d.rmeta
+│       │   │   ├── liblibc-ca935c94f6e56eb5.rmeta
+│       │   │   ├── liblibloading-2fa0277f8168f42d.rlib
+│       │   │   ├── liblibloading-2fa0277f8168f42d.rmeta
+│       │   │   ├── liblibloading-6cd8a0d8489dcede.rlib
+│       │   │   ├── liblibloading-6cd8a0d8489dcede.rmeta
+│       │   │   ├── liblinux_raw_sys-43333b1d5b9de9ba.rlib
+│       │   │   ├── liblinux_raw_sys-43333b1d5b9de9ba.rmeta
+│       │   │   ├── libloading-2fa0277f8168f42d.d
+│       │   │   ├── libloading-6cd8a0d8489dcede.d
+│       │   │   ├── liblock_api-804a78642dae6774.rmeta
+│       │   │   ├── liblock_api-9d5c110755dd83e4.rlib
+│       │   │   ├── liblock_api-9d5c110755dd83e4.rmeta
+│       │   │   ├── liblog-72f1e5f51044514a.rlib
+│       │   │   ├── liblog-72f1e5f51044514a.rmeta
+│       │   │   ├── libmatrixmultiply-c7d8532f98cc9c58.rmeta
+│       │   │   ├── libmatrixmultiply-f17d6d9a326f650c.rlib
+│       │   │   ├── libmatrixmultiply-f17d6d9a326f650c.rmeta
+│       │   │   ├── libmemchr-56b6765756afb2c6.rlib
+│       │   │   ├── libmemchr-56b6765756afb2c6.rmeta
+│       │   │   ├── libmemchr-716f0fe60b1a2f77.rmeta
+│       │   │   ├── libmemchr-f339bacf8d10fede.rlib
+│       │   │   ├── libmemchr-f339bacf8d10fede.rmeta
+│       │   │   ├── libminimal_lexical-7673ff653da5aeba.rlib
+│       │   │   ├── libminimal_lexical-7673ff653da5aeba.rmeta
+│       │   │   ├── libmio-21199e9324e5120f.rmeta
+│       │   │   ├── libmio-803e15ee3d5facdd.rlib
+│       │   │   ├── libmio-803e15ee3d5facdd.rmeta
+│       │   │   ├── libndarray-0d86fe768c642d45.rmeta
+│       │   │   ├── libndarray-f3c0ad100ed2bb5a.rlib
+│       │   │   ├── libndarray-f3c0ad100ed2bb5a.rmeta
+│       │   │   ├── libnom-4dcae3a0fe36b719.rlib
+│       │   │   ├── libnom-4dcae3a0fe36b719.rmeta
+│       │   │   ├── libnom-84c9598d094ea98b.rlib
+│       │   │   ├── libnom-84c9598d094ea98b.rmeta
+│       │   │   ├── libnum_complex-3dc850c00dbb7fa1.rmeta
+│       │   │   ├── libnum_complex-9c44187fbcaf529c.rlib
+│       │   │   ├── libnum_complex-9c44187fbcaf529c.rmeta
+│       │   │   ├── libnum_integer-2ed9e4ceb3d36b1d.rlib
+│       │   │   ├── libnum_integer-2ed9e4ceb3d36b1d.rmeta
+│       │   │   ├── libnum_integer-a55460cb22715493.rmeta
+│       │   │   ├── libnum_traits-58e4ce7e5a39f5b4.rmeta
+│       │   │   ├── libnum_traits-ca5f3939f192d06a.rlib
+│       │   │   ├── libnum_traits-ca5f3939f192d06a.rmeta
+│       │   │   ├── libparakeet_trt-062d4ccaab2bbc16.rmeta
+│       │   │   ├── libparakeet_trt-5365fe52ec7d782b.rlib
+│       │   │   ├── libparakeet_trt-5365fe52ec7d782b.rmeta
+│       │   │   ├── libparakeet_trt-fc1e2aed04d5af4b.rmeta
+│       │   │   ├── libparakeet_trt_sys-67db3cf0658c5a5e.rlib
+│       │   │   ├── libparakeet_trt_sys-67db3cf0658c5a5e.rmeta
+│       │   │   ├── libparakeet_trt_sys-900a7aab14577784.rlib
+│       │   │   ├── libparakeet_trt_sys-900a7aab14577784.rmeta
+│       │   │   ├── libparakeet_trt_sys-d1dc705fa4180ad8.rmeta
+│       │   │   ├── libparakeet_trt_sys-f604beb7c16adf9d.rmeta
+│       │   │   ├── libparking_lot-76ac07f6cbf24908.rmeta
+│       │   │   ├── libparking_lot-b882bbbd808d2ad4.rlib
+│       │   │   ├── libparking_lot-b882bbbd808d2ad4.rmeta
+│       │   │   ├── libparking_lot_core-0e24490670ba682a.rlib
+│       │   │   ├── libparking_lot_core-0e24490670ba682a.rmeta
+│       │   │   ├── libparking_lot_core-513e7d29bac86f20.rmeta
+│       │   │   ├── libpin_project_lite-1abd4834f7300c42.rmeta
+│       │   │   ├── libpin_project_lite-421ce1c4b3b009b8.rlib
+│       │   │   ├── libpin_project_lite-421ce1c4b3b009b8.rmeta
+│       │   │   ├── libprettyplease-4a19eaf012e29ced.rlib
+│       │   │   ├── libprettyplease-4a19eaf012e29ced.rmeta
+│       │   │   ├── libprettyplease-77657740001e51f6.rlib
+│       │   │   ├── libprettyplease-77657740001e51f6.rmeta
+│       │   │   ├── libprimal_check-94dfcccfcd8d612a.rmeta
+│       │   │   ├── libprimal_check-a591e02da704ff83.rlib
+│       │   │   ├── libprimal_check-a591e02da704ff83.rmeta
+│       │   │   ├── libproc_macro2-0b59c9cc9e818608.rlib
+│       │   │   ├── libproc_macro2-0b59c9cc9e818608.rmeta
+│       │   │   ├── libproc_macro2-976e5667283e37fd.rlib
+│       │   │   ├── libproc_macro2-976e5667283e37fd.rmeta
+│       │   │   ├── libquote-9ac8ad8d481f0b8b.rlib
+│       │   │   ├── libquote-9ac8ad8d481f0b8b.rmeta
+│       │   │   ├── libquote-f23c3b931df6bc1f.rlib
+│       │   │   ├── libquote-f23c3b931df6bc1f.rmeta
+│       │   │   ├── librawpointer-639defa90aef67fe.rmeta
+│       │   │   ├── librawpointer-7ecc6e671a285f63.rlib
+│       │   │   ├── librawpointer-7ecc6e671a285f63.rmeta
+│       │   │   ├── librealfft-9ae8dbe209360187.rlib
+│       │   │   ├── librealfft-9ae8dbe209360187.rmeta
+│       │   │   ├── librealfft-e7446d50b1384111.rmeta
+│       │   │   ├── libregex_automata-565695d5280d0842.rlib
+│       │   │   ├── libregex_automata-565695d5280d0842.rmeta
+│       │   │   ├── libregex-d9893bcaeebaa9af.rlib
+│       │   │   ├── libregex-d9893bcaeebaa9af.rmeta
+│       │   │   ├── libregex_syntax-853ead0da5f79d56.rlib
+│       │   │   ├── libregex_syntax-853ead0da5f79d56.rmeta
+│       │   │   ├── librustc_hash-a9df89dd202b24a0.rlib
+│       │   │   ├── librustc_hash-a9df89dd202b24a0.rmeta
+│       │   │   ├── librustfft-0d7c961660667f18.rlib
+│       │   │   ├── librustfft-0d7c961660667f18.rmeta
+│       │   │   ├── librustfft-61b29fc0c816c3f6.rmeta
+│       │   │   ├── librustix-03b08e65adb755a0.rlib
+│       │   │   ├── librustix-03b08e65adb755a0.rmeta
+│       │   │   ├── libscopeguard-bb30b235ce900732.rlib
+│       │   │   ├── libscopeguard-bb30b235ce900732.rmeta
+│       │   │   ├── libscopeguard-c8669fae5b549630.rmeta
+│       │   │   ├── libserde_core-ad2fd2389ae724f4.rlib
+│       │   │   ├── libserde_core-ad2fd2389ae724f4.rmeta
+│       │   │   ├── libserde_core-f040ce1c1daba6c3.rmeta
+│       │   │   ├── libserde_json-48d22bbd5cf5161f.rmeta
+│       │   │   ├── libserde_json-e24e8e4503b43353.rlib
+│       │   │   ├── libserde_json-e24e8e4503b43353.rmeta
+│       │   │   ├── libshlex-68503acf491aba38.rlib
+│       │   │   ├── libshlex-68503acf491aba38.rmeta
+│       │   │   ├── libsignal_hook_registry-74d29ebbf6cf1d70.rlib
+│       │   │   ├── libsignal_hook_registry-74d29ebbf6cf1d70.rmeta
+│       │   │   ├── libsignal_hook_registry-a81513273b2b9e3d.rmeta
+│       │   │   ├── libsmallvec-0fede2c6b8439d8d.rlib
+│       │   │   ├── libsmallvec-0fede2c6b8439d8d.rmeta
+│       │   │   ├── libsmallvec-470522de8ff93fdf.rmeta
+│       │   │   ├── libsocket2-80ec9e187b9e463f.rlib
+│       │   │   ├── libsocket2-80ec9e187b9e463f.rmeta
+│       │   │   ├── libsocket2-81109af7ac9ddfa6.rmeta
+│       │   │   ├── libstrength_reduce-d41329f85df3e7a9.rmeta
+│       │   │   ├── libstrength_reduce-f9000887a1f85db7.rlib
+│       │   │   ├── libstrength_reduce-f9000887a1f85db7.rmeta
+│       │   │   ├── libstrsim-23cf4b937b329fd6.rlib
+│       │   │   ├── libstrsim-23cf4b937b329fd6.rmeta
+│       │   │   ├── libstrsim-b4ed58300d41cc55.rmeta
+│       │   │   ├── libsyn-a0b6c0896063334f.rlib
+│       │   │   ├── libsyn-a0b6c0896063334f.rmeta
+│       │   │   ├── libsyn-a636d22d14524de0.rlib
+│       │   │   ├── libsyn-a636d22d14524de0.rmeta
+│       │   │   ├── libthiserror-02fb210c4e8bb706.rmeta
+│       │   │   ├── libthiserror-8a84ca2e240f9f17.rlib
+│       │   │   ├── libthiserror-8a84ca2e240f9f17.rmeta
+│       │   │   ├── libthiserror_impl-6f9e56a2a3c2147e.so
+│       │   │   ├── libtokio-4c533a852763d85b.rlib
+│       │   │   ├── libtokio-4c533a852763d85b.rmeta
+│       │   │   ├── libtokio-60b71c30ebd11211.rmeta
+│       │   │   ├── libtokio_macros-002df8df03cf107e.so
+│       │   │   ├── libtranspose-10291aff48d8b04b.rlib
+│       │   │   ├── libtranspose-10291aff48d8b04b.rmeta
+│       │   │   ├── libtranspose-36f87986ccd0cc42.rmeta
+│       │   │   ├── libunicode_ident-3c2fd7f55134ed81.rlib
+│       │   │   ├── libunicode_ident-3c2fd7f55134ed81.rmeta
+│       │   │   ├── libutf8parse-893f72810b6e0eac.rmeta
+│       │   │   ├── libutf8parse-b030b6319ceaeefc.rlib
+│       │   │   ├── libutf8parse-b030b6319ceaeefc.rmeta
+│       │   │   ├── libwhich-0d9e6ff7800541e6.rlib
+│       │   │   ├── libwhich-0d9e6ff7800541e6.rmeta
+│       │   │   ├── libzmij-8d501f9f1a6fad2d.rlib
+│       │   │   ├── libzmij-8d501f9f1a6fad2d.rmeta
+│       │   │   ├── libzmij-d106a66e1c2b34bb.rmeta
+│       │   │   ├── linux_raw_sys-43333b1d5b9de9ba.d
+│       │   │   ├── lock_api-804a78642dae6774.d
+│       │   │   ├── lock_api-9d5c110755dd83e4.d
+│       │   │   ├── log-72f1e5f51044514a.d
+│       │   │   ├── matrixmultiply-c7d8532f98cc9c58.d
+│       │   │   ├── matrixmultiply-f17d6d9a326f650c.d
+│       │   │   ├── memchr-56b6765756afb2c6.d
+│       │   │   ├── memchr-716f0fe60b1a2f77.d
+│       │   │   ├── memchr-f339bacf8d10fede.d
+│       │   │   ├── minimal_lexical-7673ff653da5aeba.d
+│       │   │   ├── mio-21199e9324e5120f.d
+│       │   │   ├── mio-803e15ee3d5facdd.d
+│       │   │   ├── ndarray-0d86fe768c642d45.d
+│       │   │   ├── ndarray-f3c0ad100ed2bb5a.d
+│       │   │   ├── nom-4dcae3a0fe36b719.d
+│       │   │   ├── nom-84c9598d094ea98b.d
+│       │   │   ├── num_complex-3dc850c00dbb7fa1.d
+│       │   │   ├── num_complex-9c44187fbcaf529c.d
+│       │   │   ├── num_integer-2ed9e4ceb3d36b1d.d
+│       │   │   ├── num_integer-a55460cb22715493.d
+│       │   │   ├── num_traits-58e4ce7e5a39f5b4.d
+│       │   │   ├── num_traits-ca5f3939f192d06a.d
+│       │   │   ├── parakeet_trt-062d4ccaab2bbc16.d
+│       │   │   ├── parakeet_trt-5365fe52ec7d782b.d
+│       │   │   ├── parakeet_trt-fc1e2aed04d5af4b.d
+│       │   │   ├── parakeet_trt_sys-67db3cf0658c5a5e.d
+│       │   │   ├── parakeet_trt_sys-900a7aab14577784.d
+│       │   │   ├── parakeet_trt_sys-d1dc705fa4180ad8.d
+│       │   │   ├── parakeet_trt_sys-f604beb7c16adf9d.d
+│       │   │   ├── parking_lot-76ac07f6cbf24908.d
+│       │   │   ├── parking_lot-b882bbbd808d2ad4.d
+│       │   │   ├── parking_lot_core-0e24490670ba682a.d
+│       │   │   ├── parking_lot_core-513e7d29bac86f20.d
+│       │   │   ├── pin_project_lite-1abd4834f7300c42.d
+│       │   │   ├── pin_project_lite-421ce1c4b3b009b8.d
+│       │   │   ├── prettyplease-4a19eaf012e29ced.d
+│       │   │   ├── prettyplease-77657740001e51f6.d
+│       │   │   ├── primal_check-94dfcccfcd8d612a.d
+│       │   │   ├── primal_check-a591e02da704ff83.d
+│       │   │   ├── proc_macro2-0b59c9cc9e818608.d
+│       │   │   ├── proc_macro2-976e5667283e37fd.d
+│       │   │   ├── quote-9ac8ad8d481f0b8b.d
+│       │   │   ├── quote-f23c3b931df6bc1f.d
+│       │   │   ├── rawpointer-639defa90aef67fe.d
+│       │   │   ├── rawpointer-7ecc6e671a285f63.d
+│       │   │   ├── realfft-9ae8dbe209360187.d
+│       │   │   ├── realfft-e7446d50b1384111.d
+│       │   │   ├── regex_automata-565695d5280d0842.d
+│       │   │   ├── regex-d9893bcaeebaa9af.d
+│       │   │   ├── regex_syntax-853ead0da5f79d56.d
+│       │   │   ├── rustc_hash-a9df89dd202b24a0.d
+│       │   │   ├── rustfft-0d7c961660667f18.d
+│       │   │   ├── rustfft-61b29fc0c816c3f6.d
+│       │   │   ├── rustix-03b08e65adb755a0.d
+│       │   │   ├── scopeguard-bb30b235ce900732.d
+│       │   │   ├── scopeguard-c8669fae5b549630.d
+│       │   │   ├── serde_core-ad2fd2389ae724f4.d
+│       │   │   ├── serde_core-f040ce1c1daba6c3.d
+│       │   │   ├── serde_json-48d22bbd5cf5161f.d
+│       │   │   ├── serde_json-e24e8e4503b43353.d
+│       │   │   ├── shlex-68503acf491aba38.d
+│       │   │   ├── signal_hook_registry-74d29ebbf6cf1d70.d
+│       │   │   ├── signal_hook_registry-a81513273b2b9e3d.d
+│       │   │   ├── smallvec-0fede2c6b8439d8d.d
+│       │   │   ├── smallvec-470522de8ff93fdf.d
+│       │   │   ├── socket2-80ec9e187b9e463f.d
+│       │   │   ├── socket2-81109af7ac9ddfa6.d
+│       │   │   ├── strength_reduce-d41329f85df3e7a9.d
+│       │   │   ├── strength_reduce-f9000887a1f85db7.d
+│       │   │   ├── strsim-23cf4b937b329fd6.d
+│       │   │   ├── strsim-b4ed58300d41cc55.d
+│       │   │   ├── syn-a0b6c0896063334f.d
+│       │   │   ├── syn-a636d22d14524de0.d
+│       │   │   ├── thiserror-02fb210c4e8bb706.d
+│       │   │   ├── thiserror-8a84ca2e240f9f17.d
+│       │   │   ├── thiserror_impl-6f9e56a2a3c2147e.d
+│       │   │   ├── tokio-4c533a852763d85b.d
+│       │   │   ├── tokio-60b71c30ebd11211.d
+│       │   │   ├── tokio_macros-002df8df03cf107e.d
+│       │   │   ├── transpose-10291aff48d8b04b.d
+│       │   │   ├── transpose-36f87986ccd0cc42.d
+│       │   │   ├── unicode_ident-3c2fd7f55134ed81.d
+│       │   │   ├── utf8parse-893f72810b6e0eac.d
+│       │   │   ├── utf8parse-b030b6319ceaeefc.d
+│       │   │   ├── which-0d9e6ff7800541e6.d
+│       │   │   ├── zmij-8d501f9f1a6fad2d.d
+│       │   │   └── zmij-d106a66e1c2b34bb.d
+│       │   ├── examples
+│       │   ├── incremental
+│       │   │   ├── build_script_build-04575zqplw5l7
+│       │   │   ├── build_script_build-1b0p0y6m3ogbg
+│       │   │   ├── build_script_build-3ntwueer6ro58
+│       │   │   ├── cli-37bn8yy73jshd
+│       │   │   ├── cli-3nz6pker9zlrg
+│       │   │   ├── cli-3rdt8h5lc85h4
+│       │   │   ├── features-0llg8pugt2zp3
+│       │   │   ├── features-1755dgr7r6udj
+│       │   │   ├── features-27yf429v9fvxi
+│       │   │   ├── parakeet_trt-1lv2cdnj2p5rj
+│       │   │   ├── parakeet_trt-2ipgqss1f1jhh
+│       │   │   ├── parakeet_trt-3bon84qrzoeml
+│       │   │   ├── parakeet_trt_sys-0e5vxivx0riyf
+│       │   │   ├── parakeet_trt_sys-1msg8akudpl76
+│       │   │   ├── parakeet_trt_sys-1p1vawdsmumxe
+│       │   │   └── parakeet_trt_sys-1vsvyh1z7o6g6
+│       │   ├── libparakeet_trt_sys.d
+│       │   └── libparakeet_trt_sys.rlib
+│       └── flycheck1
+│           ├── stderr
+│           └── stdout
+├── tools
+│   ├── analyze_tap.py
+│   ├── build_trt
+│   │   ├── build_engines.sh
+│   │   ├── build.sh
+│   │   ├── build_trt.py
+│   │   ├── profiles.py
+│   │   ├── __pycache__
+│   │   │   ├── profiles.cpython-310.pyc
+│   │   │   └── utils.cpython-310.pyc
+│   │   ├── README.md
+│   │   ├── scripts
+│   │   │   ├── build_all.sh
+│   │   │   └── inspect_engine.py
+│   │   ├── test_stage_external_data.py
+│   │   └── utils.py
+│   ├── export_onnx
+│   │   ├── export_nemo.py
+│   │   ├── export.py
+│   │   ├── out
+│   │   │   ├── Constant_2337_attr__value
+│   │   │   ├── encoder.onnx
+│   │   │   ├── joint.onnx
+│   │   │   ├── layers.0.conv.pointwise_conv1.weight
+│   │   │   ├── layers.0.conv.pointwise_conv2.weight
+│   │   │   ├── layers.10.conv.pointwise_conv1.weight
+│   │   │   ├── layers.10.conv.pointwise_conv2.weight
+│   │   │   ├── layers.11.conv.pointwise_conv1.weight
+│   │   │   ├── layers.11.conv.pointwise_conv2.weight
+│   │   │   ├── layers.12.conv.pointwise_conv1.weight
+│   │   │   ├── layers.12.conv.pointwise_conv2.weight
+│   │   │   ├── layers.13.conv.pointwise_conv1.weight
+│   │   │   ├── layers.13.conv.pointwise_conv2.weight
+│   │   │   ├── layers.14.conv.pointwise_conv1.weight
+│   │   │   ├── layers.14.conv.pointwise_conv2.weight
+│   │   │   ├── layers.15.conv.pointwise_conv1.weight
+│   │   │   ├── layers.15.conv.pointwise_conv2.weight
+│   │   │   ├── layers.16.conv.pointwise_conv1.weight
+│   │   │   ├── layers.16.conv.pointwise_conv2.weight
+│   │   │   ├── layers.17.conv.pointwise_conv1.weight
+│   │   │   ├── layers.17.conv.pointwise_conv2.weight
+│   │   │   ├── layers.18.conv.pointwise_conv1.weight
+│   │   │   ├── layers.18.conv.pointwise_conv2.weight
+│   │   │   ├── layers.19.conv.pointwise_conv1.weight
+│   │   │   ├── layers.19.conv.pointwise_conv2.weight
+│   │   │   ├── layers.1.conv.pointwise_conv1.weight
+│   │   │   ├── layers.1.conv.pointwise_conv2.weight
+│   │   │   ├── layers.20.conv.pointwise_conv1.weight
+│   │   │   ├── layers.20.conv.pointwise_conv2.weight
+│   │   │   ├── layers.21.conv.pointwise_conv1.weight
+│   │   │   ├── layers.21.conv.pointwise_conv2.weight
+│   │   │   ├── layers.22.conv.pointwise_conv1.weight
+│   │   │   ├── layers.22.conv.pointwise_conv2.weight
+│   │   │   ├── layers.23.conv.pointwise_conv1.weight
+│   │   │   ├── layers.23.conv.pointwise_conv2.weight
+│   │   │   ├── layers.2.conv.pointwise_conv1.weight
+│   │   │   ├── layers.2.conv.pointwise_conv2.weight
+│   │   │   ├── layers.3.conv.pointwise_conv1.weight
+│   │   │   ├── layers.3.conv.pointwise_conv2.weight
+│   │   │   ├── layers.4.conv.pointwise_conv1.weight
+│   │   │   ├── layers.4.conv.pointwise_conv2.weight
+│   │   │   ├── layers.5.conv.pointwise_conv1.weight
+│   │   │   ├── layers.5.conv.pointwise_conv2.weight
+│   │   │   ├── layers.6.conv.pointwise_conv1.weight
+│   │   │   ├── layers.6.conv.pointwise_conv2.weight
+│   │   │   ├── layers.7.conv.pointwise_conv1.weight
+│   │   │   ├── layers.7.conv.pointwise_conv2.weight
+│   │   │   ├── layers.8.conv.pointwise_conv1.weight
+│   │   │   ├── layers.8.conv.pointwise_conv2.weight
+│   │   │   ├── layers.9.conv.pointwise_conv1.weight
+│   │   │   ├── layers.9.conv.pointwise_conv2.weight
+│   │   │   ├── model_meta.json
+│   │   │   ├── onnx__Conv_6773
+│   │   │   ├── onnx__Conv_6776
+│   │   │   ├── onnx__Conv_6779
+│   │   │   ├── onnx__Conv_6782
+│   │   │   ├── onnx__Conv_6785
+│   │   │   ├── onnx__Conv_6788
+│   │   │   ├── onnx__Conv_6791
+│   │   │   ├── onnx__Conv_6794
+│   │   │   ├── onnx__Conv_6797
+│   │   │   ├── onnx__Conv_6800
+│   │   │   ├── onnx__Conv_6803
+│   │   │   ├── onnx__Conv_6806
+│   │   │   ├── onnx__Conv_6809
+│   │   │   ├── onnx__Conv_6812
+│   │   │   ├── onnx__Conv_6815
+│   │   │   ├── onnx__Conv_6818
+│   │   │   ├── onnx__Conv_6821
+│   │   │   ├── onnx__Conv_6824
+│   │   │   ├── onnx__Conv_6827
+│   │   │   ├── onnx__Conv_6830
+│   │   │   ├── onnx__Conv_6833
+│   │   │   ├── onnx__Conv_6836
+│   │   │   ├── onnx__Conv_6839
+│   │   │   ├── onnx__Conv_6842
+│   │   │   ├── onnx__MatMul_6845
+│   │   │   ├── onnx__MatMul_6865
+│   │   │   ├── onnx__MatMul_6866
+│   │   │   ├── onnx__MatMul_6867
+│   │   │   ├── onnx__MatMul_6877
+│   │   │   ├── onnx__MatMul_6878
+│   │   │   ├── onnx__MatMul_6879
+│   │   │   ├── onnx__MatMul_6967
+│   │   │   ├── onnx__MatMul_6973
+│   │   │   ├── onnx__MatMul_6974
+│   │   │   ├── onnx__MatMul_6975
+│   │   │   ├── onnx__MatMul_6976
+│   │   │   ├── onnx__MatMul_6977
+│   │   │   ├── onnx__MatMul_6987
+│   │   │   ├── onnx__MatMul_6988
+│   │   │   ├── onnx__MatMul_6989
+│   │   │   ├── onnx__MatMul_7005
+│   │   │   ├── onnx__MatMul_7011
+│   │   │   ├── onnx__MatMul_7012
+│   │   │   ├── onnx__MatMul_7013
+│   │   │   ├── onnx__MatMul_7014
+│   │   │   ├── onnx__MatMul_7015
+│   │   │   ├── onnx__MatMul_7025
+│   │   │   ├── onnx__MatMul_7026
+│   │   │   ├── onnx__MatMul_7027
+│   │   │   ├── onnx__MatMul_7043
+│   │   │   ├── onnx__MatMul_7049
+│   │   │   ├── onnx__MatMul_7050
+│   │   │   ├── onnx__MatMul_7051
+│   │   │   ├── onnx__MatMul_7052
+│   │   │   ├── onnx__MatMul_7053
+│   │   │   ├── onnx__MatMul_7063
+│   │   │   ├── onnx__MatMul_7064
+│   │   │   ├── onnx__MatMul_7065
+│   │   │   ├── onnx__MatMul_7081
+│   │   │   ├── onnx__MatMul_7087
+│   │   │   ├── onnx__MatMul_7088
+│   │   │   ├── onnx__MatMul_7089
+│   │   │   ├── onnx__MatMul_7090
+│   │   │   ├── onnx__MatMul_7091
+│   │   │   ├── onnx__MatMul_7101
+│   │   │   ├── onnx__MatMul_7102
+│   │   │   ├── onnx__MatMul_7103
+│   │   │   ├── onnx__MatMul_7119
+│   │   │   ├── onnx__MatMul_7125
+│   │   │   ├── onnx__MatMul_7126
+│   │   │   ├── onnx__MatMul_7127
+│   │   │   ├── onnx__MatMul_7128
+│   │   │   ├── onnx__MatMul_7129
+│   │   │   ├── onnx__MatMul_7139
+│   │   │   ├── onnx__MatMul_7140
+│   │   │   ├── onnx__MatMul_7141
+│   │   │   ├── onnx__MatMul_7157
+│   │   │   ├── onnx__MatMul_7163
+│   │   │   ├── onnx__MatMul_7164
+│   │   │   ├── onnx__MatMul_7165
+│   │   │   ├── onnx__MatMul_7166
+│   │   │   ├── onnx__MatMul_7167
+│   │   │   ├── onnx__MatMul_7177
+│   │   │   ├── onnx__MatMul_7178
+│   │   │   ├── onnx__MatMul_7179
+│   │   │   ├── onnx__MatMul_7195
+│   │   │   ├── onnx__MatMul_7201
+│   │   │   ├── onnx__MatMul_7202
+│   │   │   ├── onnx__MatMul_7203
+│   │   │   ├── onnx__MatMul_7204
+│   │   │   ├── onnx__MatMul_7205
+│   │   │   ├── onnx__MatMul_7215
+│   │   │   ├── onnx__MatMul_7216
+│   │   │   ├── onnx__MatMul_7217
+│   │   │   ├── onnx__MatMul_7233
+│   │   │   ├── onnx__MatMul_7239
+│   │   │   ├── onnx__MatMul_7240
+│   │   │   ├── onnx__MatMul_7241
+│   │   │   ├── onnx__MatMul_7242
+│   │   │   ├── onnx__MatMul_7243
+│   │   │   ├── onnx__MatMul_7253
+│   │   │   ├── onnx__MatMul_7254
+│   │   │   ├── onnx__MatMul_7255
+│   │   │   ├── onnx__MatMul_7271
+│   │   │   ├── onnx__MatMul_7277
+│   │   │   ├── onnx__MatMul_7278
+│   │   │   ├── onnx__MatMul_7279
+│   │   │   ├── onnx__MatMul_7280
+│   │   │   ├── onnx__MatMul_7281
+│   │   │   ├── onnx__MatMul_7291
+│   │   │   ├── onnx__MatMul_7292
+│   │   │   ├── onnx__MatMul_7293
+│   │   │   ├── onnx__MatMul_7309
+│   │   │   ├── onnx__MatMul_7315
+│   │   │   ├── onnx__MatMul_7316
+│   │   │   ├── onnx__MatMul_7317
+│   │   │   ├── onnx__MatMul_7318
+│   │   │   ├── onnx__MatMul_7319
+│   │   │   ├── onnx__MatMul_7329
+│   │   │   ├── onnx__MatMul_7330
+│   │   │   ├── onnx__MatMul_7331
+│   │   │   ├── onnx__MatMul_7347
+│   │   │   ├── onnx__MatMul_7353
+│   │   │   ├── onnx__MatMul_7354
+│   │   │   ├── onnx__MatMul_7355
+│   │   │   ├── onnx__MatMul_7356
+│   │   │   ├── onnx__MatMul_7357
+│   │   │   ├── onnx__MatMul_7367
+│   │   │   ├── onnx__MatMul_7368
+│   │   │   ├── onnx__MatMul_7369
+│   │   │   ├── onnx__MatMul_7385
+│   │   │   ├── onnx__MatMul_7391
+│   │   │   ├── onnx__MatMul_7392
+│   │   │   ├── onnx__MatMul_7393
+│   │   │   ├── onnx__MatMul_7394
+│   │   │   ├── onnx__MatMul_7395
+│   │   │   ├── onnx__MatMul_7405
+│   │   │   ├── onnx__MatMul_7406
+│   │   │   ├── onnx__MatMul_7407
+│   │   │   ├── onnx__MatMul_7423
+│   │   │   ├── onnx__MatMul_7429
+│   │   │   ├── onnx__MatMul_7430
+│   │   │   ├── onnx__MatMul_7431
+│   │   │   ├── onnx__MatMul_7432
+│   │   │   ├── onnx__MatMul_7433
+│   │   │   ├── onnx__MatMul_7443
+│   │   │   ├── onnx__MatMul_7444
+│   │   │   ├── onnx__MatMul_7445
+│   │   │   ├── onnx__MatMul_7461
+│   │   │   ├── onnx__MatMul_7467
+│   │   │   ├── onnx__MatMul_7468
+│   │   │   ├── onnx__MatMul_7469
+│   │   │   ├── onnx__MatMul_7470
+│   │   │   ├── onnx__MatMul_7471
+│   │   │   ├── onnx__MatMul_7481
+│   │   │   ├── onnx__MatMul_7482
+│   │   │   ├── onnx__MatMul_7483
+│   │   │   ├── onnx__MatMul_7499
+│   │   │   ├── onnx__MatMul_7505
+│   │   │   ├── onnx__MatMul_7506
+│   │   │   ├── onnx__MatMul_7507
+│   │   │   ├── onnx__MatMul_7508
+│   │   │   ├── onnx__MatMul_7509
+│   │   │   ├── onnx__MatMul_7519
+│   │   │   ├── onnx__MatMul_7520
+│   │   │   ├── onnx__MatMul_7521
+│   │   │   ├── onnx__MatMul_7537
+│   │   │   ├── onnx__MatMul_7543
+│   │   │   ├── onnx__MatMul_7544
+│   │   │   ├── onnx__MatMul_7545
+│   │   │   ├── onnx__MatMul_7546
+│   │   │   ├── onnx__MatMul_7547
+│   │   │   ├── onnx__MatMul_7557
+│   │   │   ├── onnx__MatMul_7558
+│   │   │   ├── onnx__MatMul_7559
+│   │   │   ├── onnx__MatMul_7575
+│   │   │   ├── onnx__MatMul_7581
+│   │   │   ├── onnx__MatMul_7582
+│   │   │   ├── onnx__MatMul_7583
+│   │   │   ├── onnx__MatMul_7584
+│   │   │   ├── onnx__MatMul_7585
+│   │   │   ├── onnx__MatMul_7595
+│   │   │   ├── onnx__MatMul_7596
+│   │   │   ├── onnx__MatMul_7597
+│   │   │   ├── onnx__MatMul_7613
+│   │   │   ├── onnx__MatMul_7619
+│   │   │   ├── onnx__MatMul_7620
+│   │   │   ├── onnx__MatMul_7621
+│   │   │   ├── onnx__MatMul_7622
+│   │   │   ├── onnx__MatMul_7623
+│   │   │   ├── onnx__MatMul_7633
+│   │   │   ├── onnx__MatMul_7634
+│   │   │   ├── onnx__MatMul_7635
+│   │   │   ├── onnx__MatMul_7651
+│   │   │   ├── onnx__MatMul_7657
+│   │   │   ├── onnx__MatMul_7658
+│   │   │   ├── onnx__MatMul_7659
+│   │   │   ├── onnx__MatMul_7660
+│   │   │   ├── onnx__MatMul_7661
+│   │   │   ├── onnx__MatMul_7671
+│   │   │   ├── onnx__MatMul_7672
+│   │   │   ├── onnx__MatMul_7673
+│   │   │   ├── onnx__MatMul_7689
+│   │   │   ├── onnx__MatMul_7695
+│   │   │   ├── onnx__MatMul_7696
+│   │   │   ├── onnx__MatMul_7697
+│   │   │   ├── onnx__MatMul_7698
+│   │   │   ├── onnx__MatMul_7699
+│   │   │   ├── onnx__MatMul_7709
+│   │   │   ├── onnx__MatMul_7710
+│   │   │   ├── onnx__MatMul_7711
+│   │   │   ├── onnx__MatMul_7727
+│   │   │   ├── onnx__MatMul_7733
+│   │   │   ├── onnx__MatMul_7734
+│   │   │   ├── onnx__MatMul_7735
+│   │   │   ├── onnx__MatMul_7736
+│   │   │   ├── onnx__MatMul_7737
+│   │   │   ├── onnx__MatMul_7747
+│   │   │   ├── onnx__MatMul_7748
+│   │   │   ├── onnx__MatMul_7749
+│   │   │   ├── onnx__MatMul_7765
+│   │   │   ├── onnx__MatMul_7771
+│   │   │   ├── onnx__MatMul_7772
+│   │   │   ├── onnx__MatMul_7773
+│   │   │   ├── onnx__MatMul_7774
+│   │   │   ├── onnx__MatMul_7775
+│   │   │   ├── onnx__MatMul_7785
+│   │   │   ├── onnx__MatMul_7786
+│   │   │   ├── onnx__MatMul_7787
+│   │   │   ├── onnx__MatMul_7803
+│   │   │   ├── onnx__MatMul_7809
+│   │   │   ├── onnx__MatMul_7810
+│   │   │   ├── onnx__MatMul_7811
+│   │   │   ├── onnx__MatMul_7812
+│   │   │   ├── onnx__MatMul_7813
+│   │   │   ├── onnx__MatMul_7823
+│   │   │   ├── onnx__MatMul_7824
+│   │   │   ├── onnx__MatMul_7825
+│   │   │   ├── onnx__MatMul_7841
+│   │   │   ├── onnx__MatMul_7847
+│   │   │   ├── onnx__MatMul_7848
+│   │   │   ├── predictor.onnx
+│   │   │   ├── pre_encode.conv.0.weight
+│   │   │   ├── pre_encode.conv.2.weight
+│   │   │   ├── pre_encode.conv.3.weight
+│   │   │   ├── pre_encode.conv.5.weight
+│   │   │   ├── pre_encode.conv.6.weight
+│   │   │   ├── tokenizer.model
+│   │   │   └── vocab.txt
+│   │   ├── out_streaming
+│   │   ├── README.md
+│   │   └── requirements.txt
+│   ├── onnxruntime
+│   │   ├── diagnose_cache_time_mismatch.py
+│   │   └── onnx_streaming_parity.py
+│   ├── README.md
+│   ├── run_daemon.sh
+│   ├── stt_suite
+│   │   ├── AGENTS.md
+│   │   ├── __init__.py
+│   │   ├── make_librispeech_manifest.py
+│   │   ├── make_manifest.py
+│   │   ├── run_librispeech_loopback_suite.sh
+│   │   ├── run_suite.py
+│   │   └── score_wer.py
+│   ├── tensorrt
+│   │   ├── plot_stability.py
+│   │   └── trt_streaming_parity.py
+│   └── verify_nemo
+│       ├── audit_model_arch.py
+│       ├── README.md
+│       ├── requirements.txt
+│       ├── streaming_encoder_cache.py
+│       ├── streaming_encoder_reference.py
+│       └── verify.py
+├── TRT_INTEGRATION_CHECKLIST.md
+└── TRT_INTEGRATION_CLEARANCE.md
+
+116 directories, 1141 files
