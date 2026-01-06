@@ -219,6 +219,7 @@
           "dtype": "float32",
           "shape": ["B", "T", "U", 8198],
           "layout": "BTUV",
+          "normalization": {"type": "log_softmax", "axis": -1},
           "token_head": {"offset": 0, "size": 8193},
           "duration_head": {"offset": 8193, "size": 5}
         }

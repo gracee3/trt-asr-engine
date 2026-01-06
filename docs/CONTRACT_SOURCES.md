@@ -76,12 +76,13 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - `num_classes` (token vocab): `model_config.yaml` -> `joint.num_classes` (8192).
 - `duration_values`: `model_config.yaml` -> `model_defaults.tdt_durations` and `tools/export_onnx/out/model_meta.json`.
 - IO shapes: `docs/runtime_contract.md` and `tools/export_onnx/README.md`.
+- `joint_output` normalization: `tools/export_onnx/out/joint.onnx` (graph output is `LogSoftmax` with `axis=-1`).
 
 ### Decode invariants (TDT)
 - Greedy decode algorithm (token argmax + duration argmax, advance time by duration): `docs/txt/2304.06795v2.txt` (Algorithm 2, page 5/23).
 - Blank + duration=0 disallowed (requires renorm or override): `docs/txt/2304.06795v2.txt` (page 3/23 note after Eq. 6).
 - Max symbols per decoding step guard (avoid infinite loops): `docs/txt/2304.06795v2.txt` (page 23/23).
-- Joiner head ordering (token then duration): `tools/stt_suite/AGENTS.md` and runtime env var `PARAKEET_JOINT_DUR_FIRST` (must verify against ONNX).
+- Joiner head ordering (token+blank first, durations last): evidence from `nemo/collections/asr/losses/rnnt_pytorch.py` (splits `acts[..., :-n_durations]` vs `acts[..., -n_durations:]`), `model_config.yaml` (`joint.num_extra_outputs=5`, `loss.tdt_kwargs.durations=[0,1,2,3,4]`), and `tools/export_onnx/out/joint.onnx` (single linear output size 8198, no concat).
 
 ### TRT profiles + tolerances
 - Offline component profiles: `models/parakeet-tdt-0.6b-v3/build_report.json` and `tools/build_trt/README.md`.
@@ -90,7 +91,6 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - TRT acceptance guidance: `TRT_INTEGRATION_CHECKLIST.md` and `ONNX_ORT_PARITY_README.md`.
 
 ## Provenance gaps to close
-- Confirm joiner output ordering by inspecting exported `joint.onnx` or export metadata.
 - Resolve cache size mismatch: `last_channel_cache_size=10000` (NeMo config) vs `cache_size=256` (streaming export).
 - Decide blank + duration=0 handling policy for decode (paper allows renorm; runtime currently uses a heuristic).
 - Confirm predictor cell type (LSTM vs other) from NeMo modules.

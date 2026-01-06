@@ -92,7 +92,6 @@ This is a repo scan snapshot for trt-asr-engine. Tree view captured in `docs/inv
 ## Unknowns / decision points
 - Streaming mode target: chunk-isolated (current) vs stateful cache carryover.
 - Export cache size mismatch: `last_channel_cache_size=10000` (NeMo config) vs `cache_size=256` (streaming export).
-- Joiner head order: assumed token-first; must verify against exported joint ONNX.
 - Blank + duration=0 policy: paper disallows; runtime currently has a heuristic.
 - Max symbols per timestep: runtime uses 8 (speculative; needs source or experiment).
 - Predictor details: RNN cell type not explicit in config; confirm from NeMo.

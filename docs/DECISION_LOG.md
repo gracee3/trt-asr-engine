@@ -8,8 +8,8 @@
 
 - Decision: Default joint layout is token-first, duration-last.
   Alternatives: duration-first layout via runtime switch.
-  Evidence: `tools/stt_suite/AGENTS.md` and `PARAKEET_JOINT_DUR_FIRST` runtime toggle.
-  Validation: Inspect `joint.onnx` output ordering and add a unit test that slices logits.
+  Evidence: NeMo TDT loss slices `acts[..., :-n_durations]` vs `acts[..., -n_durations:]` in `nemo/collections/asr/losses/rnnt_pytorch.py`; `model_config.yaml` sets `joint.num_extra_outputs=5` and `loss.tdt_kwargs.durations=[0,1,2,3,4]`; `tools/export_onnx/out/joint.onnx` output is a single linear of size 8198 (no concat).
+  Validation: joint ONNX inspected (LogSoftmax axis=-1 output), layout consistent with durations appended at tail; runtime toggle remains for diagnostics.
 
 - Decision: Treat current streaming export as chunk-isolated (`cache_len=0`).
   Alternatives: true stateful cache carryover.
