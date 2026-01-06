@@ -107,6 +107,61 @@ inline std::string sanitize_tap_name(const std::string& name) {
     return result;
 }
 
+// Sanitize file path to ensure it only contains safe characters
+// Replaces any non-printable, non-ASCII, or control characters with '_'
+// This prevents corrupted filenames from memory corruption or bad environment variables
+inline std::string sanitize_file_path(const std::string& path) {
+    std::string result;
+    result.reserve(path.size());
+    bool last_was_replacement = false;
+
+    for (size_t i = 0; i < path.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(path[i]);
+
+        // Allow alphanumeric, common punctuation, and path separators
+        bool is_safe = (c >= 'a' && c <= 'z') ||
+                      (c >= 'A' && c <= 'Z') ||
+                      (c >= '0' && c <= '9') ||
+                      c == '/' || c == '.' || c == '_' || c == '-';
+
+        if (is_safe) {
+            result += static_cast<char>(c);
+            last_was_replacement = false;
+        } else {
+            // Replace unsafe characters with underscore (avoid consecutive underscores)
+            if (!last_was_replacement && !result.empty() && result.back() != '/') {
+                result += '_';
+                last_was_replacement = true;
+            }
+        }
+    }
+
+    return result;
+}
+
+// Validate and sanitize a file path, logging warnings if corruption is detected
+inline std::string validate_and_sanitize_path(const std::string& path, const char* context) {
+    // Check for non-printable or non-ASCII characters
+    bool has_corruption = false;
+    for (size_t i = 0; i < path.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(path[i]);
+        if (c < 32 || c >= 127) {  // Control chars or non-ASCII
+            has_corruption = true;
+            break;
+        }
+    }
+
+    if (has_corruption) {
+        fprintf(stderr, "[AudioTap] WARNING: Detected corrupted characters in %s path, sanitizing\n", context);
+        fprintf(stderr, "[AudioTap] Original path length: %zu bytes\n", path.size());
+        std::string sanitized = sanitize_file_path(path);
+        fprintf(stderr, "[AudioTap] Sanitized to: %s\n", sanitized.c_str());
+        return sanitized;
+    }
+
+    return path;
+}
+
 // Check if specific tap is enabled: AUDIO_TAP_<SANITIZED_NAME>=1
 inline bool is_tap_enabled(const std::string& name) {
     if (!TapConfig::instance().enabled) return false;
@@ -235,7 +290,7 @@ public:
 
         enabled_ = true;
         // Cache run_dir now to avoid static destruction order issues
-        run_dir_ = TapConfig::instance().run_dir;
+        run_dir_ = validate_and_sanitize_path(TapConfig::instance().run_dir, "run_dir");
 
         // Record start time
         struct timespec ts;
