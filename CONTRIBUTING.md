@@ -21,6 +21,15 @@ This repo is a **native, offline, streaming ASR engine prototype** built around 
 
 - **NeMo verification**: see `tools/verify_nemo/README.md`
 - **ONNX export**: see `tools/export_onnx/README.md`
+- **Runtime contract**: see `contracts/parakeet-tdt-0.6b-v3.contract.json` and `docs/CONTRACT_SOURCES.md`
+
+## Design decisions
+
+New design decisions should be recorded in `docs/DECISION_LOG.md` with:
+- The decision made
+- Alternatives considered
+- Evidence/sources supporting the decision
+- Validation approach
 
 ## Do not commit model artifacts
 

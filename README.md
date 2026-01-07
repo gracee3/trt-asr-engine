@@ -43,6 +43,24 @@ Why TensorRT + transducer-style models:
 - **TensorRT** provides strong latency/throughput for deployment on NVIDIA GPUs.
 - **RNNT/TDT-style transducers** map naturally to streaming: you can incrementally run the encoder on new audio and step the predictor/joint during decode.
 
+### Streaming encoder with stateful cache
+
+The streaming encoder uses **true stateful cache carryover** (not chunk-isolated). Key characteristics:
+
+- **Batch-first cache layout**: `cache_last_channel [B, L, T, D]`, `cache_last_time [B, L, D, K]`
+- **Explicit cache length tracking**: `cache_last_channel_len` / `cache_last_channel_len_out` tracks valid cache depth
+- **Cache grows over time**: starts at 0 and increases monotonically until it saturates at `cache_size`
+- **Joint output is raw logits**: no LogSoftmax in the graph; runtime applies per-head softmax when needed
+
+See `contracts/parakeet-tdt-0.6b-v3.contract.json` for the canonical runtime contract.
+
+### Timebase
+
+- **Feature frame shift**: 10ms (hop length 160 @ 16kHz)
+- **Encoder subsampling**: 8x (Fast Conformer)
+- **Encoder step**: 80ms
+- **TDT duration values**: `[0, 1, 2, 3, 4]` advance encoder time index by that many 80ms steps
+
 ## Quick start (developer-oriented)
 
 ### Prerequisites (development)
@@ -98,9 +116,22 @@ This produces:
 
 - `tools/export_onnx/out/encoder.onnx` (may also emit `encoder.onnx.data`)
 - `tools/export_onnx/out/predictor.onnx`
-- `tools/export_onnx/out/joint.onnx`
+- `tools/export_onnx/out/joint.onnx` (raw logits, no LogSoftmax)
 - `tools/export_onnx/out/model_meta.json` (includes tensor layout contracts)
 - tokenizer/vocab assets
+
+#### Export streaming encoder (stateful cache)
+
+```bash
+python -u tools/export_onnx/export.py \
+  --model models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
+  --out tools/export_onnx/out \
+  --component encoder_streaming \
+  --streaming-cache-size 256 \
+  --device cpu
+```
+
+This produces `encoder_streaming.onnx` with explicit cache inputs/outputs for true streaming inference.
 
 ### 5) Build TensorRT engines (placeholder)
 
@@ -132,16 +163,22 @@ The shared library will be at `cpp/build/libparakeet_trt.so`.
 
 ## Repository structure
 
+- **`contracts/`**: canonical runtime contracts (JSON)
+  - `contracts/parakeet-tdt-0.6b-v3.contract.json`: full model contract with IO shapes, streaming params, decode rules
 - **`tools/`**: dev tooling pipeline
-  - `tools/verify_nemo/`: NeMo verification harness (golden output)
+  - `tools/verify_nemo/`: NeMo verification harness (golden output, streaming reference)
   - `tools/export_onnx/`: deterministic NeMo → ONNX export (validated)
   - `tools/build_trt/`: TensorRT engine build scripts (WIP)
+  - `tools/onnxruntime/`: ORT parity and streaming validation tools
   - `tools/analyze_tap.py`: audio/feature tap analysis tool
 - **`models/`**: local-only `.nemo` weights (gitignored; see `models/README.md`)
 - **`cpp/`**: C++ TensorRT runtime + C ABI
   - `cpp/include/audio_tap.h`: reusable audio tap writer for pipeline debugging
 - **`rust/`**: feature extraction, FFI bindings, CLI demo
 - **`docs/`**: documentation
+  - `docs/ARCHITECTURE_RUNTIME.md`: runtime architecture (C++ core + Rust edge)
+  - `docs/CONTRACT_SOURCES.md`: provenance for every contract field
+  - `docs/DECISION_LOG.md`: design decisions with evidence
   - `docs/debugging.md`: comprehensive debugging guide
   - `docs/runtime_contract.md`: tensor interface contracts
 
@@ -204,7 +241,14 @@ This repository **does not redistribute model weights**.
 ## Status / roadmap
 
 - **Phase 1 (complete)**: deterministic NeMo → ONNX export with validated predictor/joint interfaces
+- **Phase 2 (complete)**: stateful cache streaming encoder
+  - Streaming encoder with true cache carryover (not chunk-isolated)
+  - Batch-first cache layout with explicit `cache_last_channel_len` tracking
+  - Joint output as raw logits (no LogSoftmax); token-first, duration-last head layout
+  - ORT parity validation for closed-loop streaming
+  - Canonical JSON contract (`contracts/parakeet-tdt-0.6b-v3.contract.json`)
 - **Next**:
   - TensorRT engine build + packaging (including external ONNX data)
-  - streaming C++ decode loop integration
+  - Streaming C++ decode loop integration with TDT greedy decode
+  - Feature normalization decision: model-matching (per-utterance) vs streaming-safe override
   - Rust CLI polish and integration into larger systems

@@ -9,10 +9,10 @@
 ## Phase 1: Pre-Build (Review & Planning) — ✅ COMPLETE
 
 ### 1.1 Review Binding Contract
-- [x] Read [`contracts/encoder_streaming.contract.json`](contracts/encoder_streaming.contract.json)
+- [x] Read [`contracts/parakeet-tdt-0.6b-v3.contract.json`](contracts/parakeet-tdt-0.6b-v3.contract.json)
 - [x] Understand I/O shapes and dynamic dimensions
 - [x] Review optimization profiles (T=592, T=584, unified)
-- [x] Understand cache isolation contract (`cache_len=0` always)
+- [x] Understand stateful cache contract (`cache_len` starts at 0, increases monotonically)
 
 ### 1.2 Review Parity Test Results
 - [x] Read [`ONNX_PARITY_RESULTS.md`](ONNX_PARITY_RESULTS.md)
@@ -115,19 +115,19 @@ class StreamingEncoderTRT:
 
         return outputs
 
-    def _validate_streaming_contract(self, outputs):
+    def _validate_streaming_contract(self, outputs, cache_len_in):
         """Hard fail on contract violations."""
-        # Assertion 1: Encoded lengths must be 1 (valid_out_len=1)
-        assert np.all(outputs['encoded_lengths'] == 1), \
-            f"STREAMING CONTRACT VIOLATION: encoded_lengths != 1, got {outputs['encoded_lengths']}"
+        # Assertion 1: Encoded lengths must be 2 (valid_out_len=2)
+        assert np.all(outputs['encoded_lengths'] == 2), \
+            f"STREAMING CONTRACT VIOLATION: encoded_lengths != 2, got {outputs['encoded_lengths']}"
 
-        # Assertion 2: Encoder output time dimension must be 1
-        assert outputs['encoder_output'].shape[-1] == 1, \
-            f"STREAMING CONTRACT VIOLATION: encoder_output time != 1, shape={outputs['encoder_output'].shape}"
+        # Assertion 2: Encoder output time dimension must be 2
+        assert outputs['encoder_output'].shape[-1] == 2, \
+            f"STREAMING CONTRACT VIOLATION: encoder_output time != 2, shape={outputs['encoder_output'].shape}"
 
-        # Assertion 3: Cache length must be 0 (chunk-isolated mode)
-        assert np.all(outputs['cache_last_channel_len_out'] == 0), \
-            f"STREAMING CONTRACT VIOLATION: cache_len != 0, got {outputs['cache_last_channel_len_out']}"
+        # Assertion 3: Cache length must be monotonically non-decreasing (stateful cache)
+        assert np.all(outputs['cache_last_channel_len_out'] >= cache_len_in), \
+            f"STREAMING CONTRACT VIOLATION: cache_len decreased, in={cache_len_in}, out={outputs['cache_last_channel_len_out']}"
 
     def _allocate_buffers(self):
         # Implementation details for buffer allocation
@@ -157,7 +157,7 @@ class StreamingEncoderTRT:
     --summary-json artifacts/parity/trt_parity_50chunks_functional.json
   ```
 - [x] Review results:
-  - **PASSED:** All contract assertions (cache_len=0, encoded_len=1, time_dim=1)
+  - **PASSED:** All contract assertions (cache_len monotonic, encoded_len=2, time_dim=2)
   - **ACTUAL:** encoder_output errors 8e-5 to 1.3e-3 (P95: 4.88e-4)
   - **PASSED:** cache_last_time_out errors within 0.1 tolerance
 
@@ -241,7 +241,7 @@ class StreamingEncoderTRT:
 ### 6.2 CI/CD Integration
 - [ ] Add TRT parity test to CI pipeline
 - [ ] Set up regression detection:
-  - [ ] Fail if cache_len != 0 detected
+  - [ ] Fail if cache_len not monotonically increasing
   - [ ] Fail if encoder_output errors exceed 1e-3
   - [ ] Warn if errors exceed 5e-4
 
@@ -293,11 +293,11 @@ class StreamingEncoderTRT:
 
 ### Issue: Contract Assertion Failures
 
-**Symptom:** `cache_last_channel_len_out != 0`
+**Symptom:** `cache_last_channel_len_out` not monotonically increasing
 **Action:**
-1. Inspect ONNX graph for conditional logic on cache_len
-2. Re-run ORT parity to verify baseline
-3. Check if engine build modified graph semantics
+1. Verify cache feedback is being passed correctly between chunks
+2. Check if cache_drop_size clamping is configured correctly
+3. Re-run ORT parity to verify baseline
 4. **ESCALATE:** Re-validate full cache parity before proceeding
 
 ### Issue: High encoder_output Errors (> 1e-3)
@@ -347,7 +347,7 @@ class StreamingEncoderTRT:
 **References:**
 - [TRT_INTEGRATION_CLEARANCE.md](TRT_INTEGRATION_CLEARANCE.md) - Full clearance documentation
 - [ONNX_PARITY_RESULTS.md](ONNX_PARITY_RESULTS.md) - ORT parity baseline
-- [contracts/encoder_streaming.contract.json](contracts/encoder_streaming.contract.json) - Binding specification
+- [contracts/parakeet-tdt-0.6b-v3.contract.json](contracts/parakeet-tdt-0.6b-v3.contract.json) - Canonical runtime contract
 - [CACHE_TIME_ROOT_CAUSE_ANALYSIS.md](CACHE_TIME_ROOT_CAUSE_ANALYSIS.md) - Known issue deep-dive
 
 **TRT Tools Created:**

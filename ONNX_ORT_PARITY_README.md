@@ -11,7 +11,7 @@
 **For TRT Integration Team:**
 1. Start here: [TRT_INTEGRATION_CLEARANCE.md](TRT_INTEGRATION_CLEARANCE.md) ← **Read this first**
 2. Follow this: [TRT_INTEGRATION_CHECKLIST.md](TRT_INTEGRATION_CHECKLIST.md) ← **Step-by-step guide**
-3. Reference this: [contracts/encoder_streaming.contract.json](contracts/encoder_streaming.contract.json) ← **Binding spec**
+3. Reference this: [contracts/parakeet-tdt-0.6b-v3.contract.json](contracts/parakeet-tdt-0.6b-v3.contract.json) ← **Canonical contract**
 
 **For Deep Technical Review:**
 1. [ONNX_PARITY_RESULTS.md](ONNX_PARITY_RESULTS.md) - Comprehensive ORT parity test results
@@ -24,10 +24,10 @@
 ### ✅ Validation Complete
 
 ONNX export (`encoder_streaming.onnx`) has been validated against PyTorch reference:
-- **Streaming contract:** `valid_out_len=1` preserved (all chunks output time=1)
+- **Streaming contract:** `valid_out_len=2` (all chunks output 2 encoder steps)
 - **Encoder output parity:** FP32 errors 6e-5 to 7e-4 (acceptable variance)
 - **Closed-loop stability:** No error accumulation over 50 chunks
-- **Cache contract:** Chunk-isolated mode (`cache_len=0` always)
+- **Cache contract:** Stateful cache mode (`cache_last_channel_len_out` starts at 0 and increases monotonically)
 
 ### ⚠️ Known Issue (Non-Blocking)
 
@@ -60,8 +60,8 @@ ONNX export (`encoder_streaming.onnx`) has been validated against PyTorch refere
 
 | File | Purpose | Usage |
 |------|---------|-------|
-| [contracts/encoder_streaming.contract.json](contracts/encoder_streaming.contract.json) | I/O shapes, profiles, runtime contract | Engine build, validation |
-| [out/encoder_streaming.onnx](out/encoder_streaming.onnx) | ONNX model file | TRT engine source |
+| [contracts/parakeet-tdt-0.6b-v3.contract.json](contracts/parakeet-tdt-0.6b-v3.contract.json) | Full runtime contract (I/O shapes, streaming params, decode rules) | Engine build, validation |
+| [tools/export_onnx/out/encoder_streaming.onnx](tools/export_onnx/out/encoder_streaming.onnx) | ONNX streaming encoder | TRT engine source |
 
 ### Test Infrastructure
 
@@ -98,20 +98,21 @@ ONNX export (`encoder_streaming.onnx`) has been validated against PyTorch refere
 
 ## Key Findings
 
-### 1. Streaming Contract: Chunk-Isolated Mode
+### 1. Streaming Contract: Stateful Cache Mode
 
-**Discovery:** `cache_last_channel_len == 0` for ALL chunks (input and output)
+**Current Mode:** `cache_last_channel_len_out` starts at 0 and increases monotonically
 
 **Implications:**
-- Model operates in **"chunk-by-chunk"** mode with per-chunk cache reset
-- Cache used **intra-chunk** (within single forward pass)
-- Cache NOT carried **inter-chunk** (reset between chunks)
-- Simpler contract than initially assumed
+- Model operates in **true stateful streaming** with cache carryover between chunks
+- Cache grows from 0 up to `cache_size` (256) as streaming progresses
+- `valid_out_len=2` means each chunk outputs 2 encoder steps
+- Cache feedback is carried inter-chunk (not reset)
 
 **Runtime Requirements:**
 ```python
-# MANDATORY ASSERTION at every chunk
-assert cache_last_channel_len_out == 0
+# MANDATORY ASSERTIONS at every chunk
+assert outputs['encoded_lengths'] == 2  # valid_out_len=2
+assert outputs['cache_last_channel_len_out'] >= cache_last_channel_len_in  # monotonic
 ```
 
 ### 2. Encoder Output Parity
@@ -131,12 +132,12 @@ assert cache_last_channel_len_out == 0
 | Cache Tensor | Status | Notes |
 |--------------|--------|-------|
 | `cache_last_channel_out` | ✅ Perfect match | Bitwise identical to PyTorch |
-| `cache_last_time_out` | ⚠️ Known mismatch | 0.01-0.1 abs error, non-blocking |
-| `cache_last_channel_len_out` | ✅ Perfect match | Always 0 (contract) |
+| `cache_last_time_out` | ⚠️ Known mismatch | 0.01-0.1 abs error, acceptable |
+| `cache_last_channel_len_out` | ✅ Perfect match | Monotonically increasing (0, 2, 4, 6...) |
 
 **cache_last_time_out Resolution:**
 - Errors are real (diagnostic validated)
-- But non-propagating due to `cache_len=0` isolation
+- Within acceptable tolerance for streaming
 - TRT tolerance: atol=0.1 acceptable
 
 ---
@@ -148,7 +149,7 @@ assert cache_last_channel_len_out == 0
 **Functional Mode (Reference Caches):**
 - CPU & CUDA: Identical behavior (no EP-specific issues)
 - encoder_output: 58% pass rate @ atol=1e-4
-- Contract invariants: 100% pass (encoded_lengths=1, cache_len=0)
+- Contract invariants: 100% pass (encoded_lengths=2, cache_len monotonic)
 
 **Closed-Loop Mode (Cache Feedback):**
 - CPU & CUDA: Identical behavior
@@ -159,9 +160,9 @@ assert cache_last_channel_len_out == 0
 
 **Check 1:** Errors uniformly distributed → NOT padding-side issue
 **Check 2:** Errors in significant regions → NOT padding junk
-**Check 3:** Cache IS semantically active → Intra-chunk usage confirmed
+**Check 3:** Cache IS semantically active → Both intra-chunk and inter-chunk usage confirmed
 
-**Resolution:** Cache isolation via `cache_len=0` explains all observations
+**Resolution:** Stateful cache carryover validated with monotonic cache_len growth
 
 ---
 
@@ -218,13 +219,13 @@ assert cache_last_channel_len_out == 0
 
 ## Troubleshooting
 
-### Q: Contract assertion failed (cache_len != 0)
+### Q: Contract assertion failed (cache_len not monotonic)
 
-**A:** This is a **CRITICAL FAILURE**. The streaming config has changed:
-1. Stop integration immediately
+**A:** Cache length should be monotonically non-decreasing. If it decreases or behaves unexpectedly:
+1. Check if streaming config parameters changed
 2. Re-run diagnostic: `python3 tools/onnxruntime/diagnose_cache_time_mismatch.py`
-3. Re-validate cache parity with strict tolerances
-4. Escalate to ONNX export team
+3. Verify `cache_drop_size` clamping is working correctly
+4. Re-validate against PyTorch reference
 
 ### Q: encoder_output errors exceed 1e-3
 
@@ -249,13 +250,14 @@ assert cache_last_channel_len_out == 0
 ### If Streaming Config Changes
 
 **Conditions requiring re-validation:**
-- ❌ `cache_last_channel_len > 0` observed
-- ❌ `valid_out_len != 1` in future configs
+- ❌ `cache_last_channel_len_out` not monotonically increasing
+- ❌ `valid_out_len != 2` in future configs
 - ❌ Different chunk sizes or shift parameters
+- ❌ `cache_drop_size` changed without re-validation
 
 **Actions:**
 1. Re-run full diagnostic suite
-2. Tighten cache_last_time tolerance to atol=1e-4
+2. Verify cache_len progression matches expected pattern (0, 2, 4, 6...)
 3. Validate inter-chunk error propagation
 4. Update binding contract accordingly
 
