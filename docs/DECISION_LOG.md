@@ -50,3 +50,9 @@
   Alternatives: treat duration as feature-frame steps (incorrect for 8x subsampling).
   Evidence: model config `subsampling_factor=8`; Fast Conformer paper notes 10ms → 80ms; TDT algorithm advances encoder time index by duration.
   Validation: check decode timestamps and duration behavior against PyTorch reference on deterministic samples.
+
+## 2026-01-07
+- Decision: Feature normalization default remains UNLOCKED pending WER gate; both normalization modes currently yield mostly empty transcripts.
+  Alternatives: lock to model-matching (`per_feature`) or streaming-safe (`none`).
+  Evidence: `docs/VALIDATION_REPORT_WER.md` shows WER 100% (none) and 98.23% (per_feature) on the pinned dev gate.
+  Validation: fix decode/output empties and re-run the gate to decide the default.

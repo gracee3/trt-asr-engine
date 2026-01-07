@@ -107,4 +107,4 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - Resolve cache size mismatch: `last_channel_cache_size=10000` (NeMo config) vs `cache_size=256` (streaming export).
 - Decide blank + duration=0 handling policy for decode (paper allows renorm; runtime currently uses a heuristic).
 - Confirm predictor cell type (LSTM vs other) from NeMo modules.
-- Decide feature normalization policy: keep model-matching per-feature (per-utterance) or override to streaming-safe normalization per the streaming paper.
+- Decide feature normalization policy: WER gate on `eval/manifests/librispeech_dev_gate.tsv` currently fails for both modes (see `docs/VALIDATION_REPORT_WER.md`); fix decode/output empties before locking the default.

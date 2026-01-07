@@ -46,6 +46,7 @@ Key crates:
 - Feature frame shift is 10ms (hop length 160 @ 16kHz); encoder step is 80ms with 8x subsampling.
 - TDT duration values advance encoder steps; timestamps must use the encoder timebase (80ms per step).
 - NeMo `normalize=per_feature` computes per-utterance mean/std over time; this is not streaming-safe per the streaming paper.
+- CLI normalization selection: `PARAKEET_FEATURE_NORM=none|per_feature` (per-feature uses full-utterance stats).
 - Runtime must choose: match model normalization (requires full-utterance stats) or override with streaming-safe normalization (model deviation).
 
 ## Streaming state model

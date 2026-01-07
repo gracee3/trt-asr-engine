@@ -9,6 +9,7 @@ This is a repo scan snapshot for trt-asr-engine. Tree view captured in `docs/inv
 - `tools/`: Python tooling (export, parity, TRT build, diagnostics, STT suite).
 - `contracts/`: machine-readable binding contracts.
 - `docs/`: human-readable docs.
+- `eval/`: pinned evaluation manifests (WAVs are generated/ignored).
 - `models/`: local model artifacts (`.nemo`, built engines).
 - `out/`: generated ONNX exports and external data (gitignored).
 - `artifacts/`: generated parity/stability outputs (gitignored).
@@ -44,6 +45,7 @@ This is a repo scan snapshot for trt-asr-engine. Tree view captured in `docs/inv
 - STT test suite:
   - `tools/stt_suite/run_suite.py` (CLI + loopback suite).
   - `tools/stt_suite/make_manifest.py` and `tools/stt_suite/make_librispeech_manifest.py`.
+  - `tools/stt_suite/make_gate_manifest.py` (pinned dev-clean/dev-other gate manifest).
   - `tools/stt_suite/score_wer.py` and `tools/stt_suite/run_librispeech_loopback_suite.sh`.
 
 ## Validation + parity harnesses
