@@ -45,6 +45,7 @@ python -u tools/export_onnx/export.py \
 ## Smoke tests
 - ONNX checker: PASS (encoder/predictor/joint/encoder_streaming)
 - ORT one-pass smoke test: PASS (predictor + joint, CPUExecutionProvider)
+- Joint graph check: PASS (`python tools/inspect_onnx/check_joint_output.py`)
 
 ## Notes
 - Dynamic axes: enabled for batch/time dims; cache tensors batch axis dynamic.

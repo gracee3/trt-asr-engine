@@ -31,6 +31,8 @@ This is a repo scan snapshot for trt-asr-engine. Tree view captured in `docs/inv
 - ONNX Runtime parity:
   - `tools/onnxruntime/onnx_streaming_parity.py` (functional + closed loop).
   - `tools/onnxruntime/diagnose_cache_time_mismatch.py` (cache mismatch diagnostics).
+- ONNX inspection:
+  - `tools/inspect_onnx/check_joint_output.py` (verifies joint output shape + absence of LogSoftmax).
 - TensorRT parity:
   - `tools/tensorrt/trt_streaming_parity.py` (TRT parity harness).
   - `tools/tensorrt/plot_stability.py` (error drift plots).
@@ -92,9 +94,8 @@ This is a repo scan snapshot for trt-asr-engine. Tree view captured in `docs/inv
 ## Unknowns / decision points
 - Streaming mode target is stateful cache carryover; ORT closed-loop parity now passes with batch-first cache layout.
 - Export cache size mismatch: `last_channel_cache_size=10000` (NeMo config) vs `cache_size=256` (streaming export).
-- Joint output normalization: current `joint.onnx` uses global LogSoftmax; re-export is required to emit raw logits.
 - Blank + duration=0 policy: paper disallows; runtime currently has a heuristic.
 - Max symbols per timestep: runtime uses 8 (speculative; needs source or experiment).
 - Predictor details: RNN cell type not explicit in config; confirm from NeMo.
-- Feature normalization: NeMo uses `normalize=per_feature`; streaming paper warns full-utterance stats break streaming.
+- Feature normalization: `normalize=per_feature` uses per-utterance mean/std (not streaming-safe); decide whether to keep model-matching or override.
 - Full pipeline parity harness: only streaming encoder parity exists; predictor/joint/decode parity still needed.

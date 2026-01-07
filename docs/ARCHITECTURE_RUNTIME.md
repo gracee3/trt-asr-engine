@@ -42,6 +42,12 @@ Key crates:
 - TRT outputs remain on device until a small CPU copy is required for decode (token/duration argmax).
 - All buffers are allocated once at session init; no heap allocation in the steady-state loop.
 
+## Timebase + feature normalization
+- Feature frame shift is 10ms (hop length 160 @ 16kHz); encoder step is 80ms with 8x subsampling.
+- TDT duration values advance encoder steps; timestamps must use the encoder timebase (80ms per step).
+- NeMo `normalize=per_feature` computes per-utterance mean/std over time; this is not streaming-safe per the streaming paper.
+- Runtime must choose: match model normalization (requires full-utterance stats) or override with streaming-safe normalization (model deviation).
+
 ## Streaming state model
 Single struct (per session) to carry all mutable state:
 - Encoder caches:

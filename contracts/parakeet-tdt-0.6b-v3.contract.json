@@ -18,11 +18,22 @@
     "window_stride_sec": 0.01,
     "window": "hann",
     "normalize": "per_feature",
+    "normalize_scope": "utterance_time",
+    "normalize_stats": "mean_std",
+    "normalize_requires_full_utterance": true,
+    "normalize_streaming_safe": false,
     "log": true,
     "frame_splicing": 1,
     "dither": 1.0e-05,
     "pad_to": 0,
     "pad_value": 0.0
+  },
+  "timebase": {
+    "feature_frame_shift_ms": 10,
+    "encoder_subsampling_factor": 8,
+    "encoder_frame_shift_ms": 80,
+    "encoder_steps_per_second": 12.5,
+    "duration_unit": "encoder_step"
   },
   "tokenizer": {
     "type": "bpe",
@@ -250,7 +261,10 @@
     "cache_valid_region": "cache_last_channel_len_out defines valid prefix length along cache_last_channel_out axis=2",
     "cache_pad": {"side": "right", "value": 0},
     "chunk_size": [577, 584],
+    "chunk_size_units": "feature_frames",
     "shift_size": [9, 16],
+    "shift_size_units": "feature_frames",
+    "valid_out_len_units": "encoder_steps",
     "cache_drop_size": 71,
     "pre_encode_cache_size": [0, 9],
     "drop_extra_pre_encoded": 2,

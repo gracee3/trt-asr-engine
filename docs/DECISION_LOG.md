@@ -40,3 +40,13 @@
   Alternatives: accept negative cache_len or disable `drop_extra_pre_encoded`.
   Evidence: pre-encode length for chunk0 (577/584 frames) is 73; after `drop_extra_pre_encoded=2`, max usable length is 71; `cache_drop_size=72` yields negative cache_len.
   Validation: clamp to 71 → `cache_last_channel_len_out` starts at 0 and increases (0,2,4,6) in closed-loop parity.
+
+- Decision: Record feature normalization semantics as per-utterance mean/std over time (`normalize=per_feature`), and flag as not streaming-safe.
+  Alternatives: override with streaming-safe normalization (e.g., none or fixed stats).
+  Evidence: NeMo `normalize_batch` computes mean/std across the full `seq_len` time axis per feature; streaming paper avoids mel-spectrogram normalization requiring whole-utterance stats.
+  Validation: decide whether to keep model-matching normalization or override; run feature parity vs NeMo either way.
+
+- Decision: Define timebase as 10ms feature frame shift and 8x subsampling → 80ms encoder step; TDT durations advance encoder steps.
+  Alternatives: treat duration as feature-frame steps (incorrect for 8x subsampling).
+  Evidence: model config `subsampling_factor=8`; Fast Conformer paper notes 10ms → 80ms; TDT algorithm advances encoder time index by duration.
+  Validation: check decode timestamps and duration behavior against PyTorch reference on deterministic samples.

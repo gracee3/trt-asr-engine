@@ -34,10 +34,21 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - `features.window_stride_sec`: `model_config.yaml` -> `preprocessor.window_stride`.
 - `features.window_length`: derived = `sample_rate * window_size_sec` (16k * 0.025 = 400).
 - `features.hop_length`: derived = `sample_rate * window_stride_sec` (16k * 0.01 = 160; matches `model_meta.json`).
-- `features.window_type`: `model_config.yaml` -> `preprocessor.window`.
+- `features.window`: `model_config.yaml` -> `preprocessor.window`.
 - `features.normalize`: `model_config.yaml` -> `preprocessor.normalize`.
+- `features.normalize_scope`: `nemo/collections/asr/parts/preprocessing/features.py` -> `normalize_batch` computes mean/std across the full valid time axis (`seq_len`), per feature (per-utterance).
+- `features.normalize_stats`: `nemo/collections/asr/parts/preprocessing/features.py` -> `normalize_batch` uses mean/std.
+- `features.normalize_requires_full_utterance`: derived from `normalize_batch` using the full `seq_len` for each sample; not streaming-safe without buffering.
+- `features.normalize_streaming_safe`: `docs/txt/2312.17279v3.txt` (page 4/8) states they avoid mel-spectrogram normalization requiring whole-utterance stats; set false for model-matching.
 - `features.log_mel`: `model_config.yaml` -> `preprocessor.log`.
 - `features.dither`: `model_config.yaml` -> `preprocessor.dither`.
+
+### Timebase
+- `timebase.feature_frame_shift_ms`: derived from `features.hop_length`/`features.sample_rate_hz` (160/16000 = 10ms); supported by `docs/txt/2312.17279v3.txt` (page 6/8, 10ms shift).
+- `timebase.encoder_subsampling_factor`: `model_config.yaml` -> `encoder.subsampling_factor` (8) and `docs/txt/2305.05084v6.txt` (page 2/8).
+- `timebase.encoder_frame_shift_ms`: derived = `feature_frame_shift_ms * subsampling_factor` (10 * 8 = 80ms); `docs/txt/2305.05084v6.txt` (page 2/8) notes 10ms → 80ms via 8x subsampling.
+- `timebase.encoder_steps_per_second`: derived = `1000 / encoder_frame_shift_ms` (12.5).
+- `timebase.duration_unit`: TDT decode advances encoder step index by duration (Algorithm 2, `docs/txt/2304.06795v2.txt` page 5/23).
 
 ### Tokenizer
 - `tokenizer.type`: `model_config.yaml` -> `tokenizer.type` (bpe).
@@ -64,6 +75,7 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - `valid_out_len=2`: `encoder.streaming_cfg.valid_out_len` after `setup_streaming_params` with clamped cache_drop_size (see `tools/verify_nemo/streaming_encoder_cache.py` run logs).
 - Streaming chunk params (`chunk_size`, `shift_size`, `cache_drop_size`, `pre_encode_cache_size`, `drop_extra_pre_encoded`): `encoder.streaming_cfg` after `setup_streaming_params` (see `tools/verify_nemo/streaming_encoder_cache.py` run logs).
 - `cache_drop_size` clamp (72 → 71): derived by measuring pre-encode length for chunk0 (577/584 frames) minus `drop_extra_pre_encoded=2` to avoid negative cache_len (see `tools/verify_nemo/streaming_encoder_cache.py` output + NeMo pre_encode behavior).
+- `chunk_size_units`/`shift_size_units`: `setup_streaming_params` uses feature-frame counts (pre-encoder). `valid_out_len_units`: encoder steps post-subsampling.
 - Cache semantics + need for context-limited caching: `docs/txt/2312.17279v3.txt` (page 4/8).
 - Stateful cache carryover behavior: implemented in NeMo `ConformerEncoder.forward_internal` and `streaming_post_process` (`nemo/collections/asr/modules/conformer_encoder.py`); validated via ORT closed-loop parity on `encoder_streaming.onnx`.
 
@@ -77,7 +89,7 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - `num_classes` (token vocab): `model_config.yaml` -> `joint.num_classes` (8192).
 - `duration_values`: `model_config.yaml` -> `model_defaults.tdt_durations` and `tools/export_onnx/out/model_meta.json`.
 - IO shapes: `docs/runtime_contract.md` and `tools/export_onnx/README.md`.
-- `joint_output` normalization target: raw logits (export forces `joint.log_softmax=False` in `tools/export_onnx/export.py`; verify after re-export).
+- `joint_output` normalization target: raw logits (export forces `joint.log_softmax=False` in `tools/export_onnx/export.py`; `tools/inspect_onnx/check_joint_output.py` confirms `joint.onnx` has no `LogSoftmax` or `Softmax` nodes after re-export).
 
 ### Decode invariants (TDT)
 - Greedy decode algorithm (token argmax + duration argmax, advance time by duration): `docs/txt/2304.06795v2.txt` (Algorithm 2, page 5/23).
@@ -95,4 +107,4 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - Resolve cache size mismatch: `last_channel_cache_size=10000` (NeMo config) vs `cache_size=256` (streaming export).
 - Decide blank + duration=0 handling policy for decode (paper allows renorm; runtime currently uses a heuristic).
 - Confirm predictor cell type (LSTM vs other) from NeMo modules.
-- Validate feature normalization policy for streaming equivalence (per-feature vs no normalization).
+- Decide feature normalization policy: keep model-matching per-feature (per-utterance) or override to streaming-safe normalization per the streaming paper.
