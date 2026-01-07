@@ -3167,6 +3167,21 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         // #endregion
 
         if (debug_tdt_steps > 0 && debug_tdt_emitted < debug_tdt_steps) {
+          auto logsumexp = [&](int offset, int count) -> double {
+            if (count <= 0) return 0.0;
+            float max_v = -1.0e9f;
+            for (int i = 0; i < count; ++i) {
+              const float v = head_logits[static_cast<size_t>(offset + i)];
+              if (v > max_v) max_v = v;
+            }
+            double sum = 0.0;
+            for (int i = 0; i < count; ++i) {
+              const float v = head_logits[static_cast<size_t>(offset + i)];
+              sum += std::exp(static_cast<double>(v - max_v));
+            }
+            return static_cast<double>(max_v) + std::log(sum);
+          };
+
           auto topk_json = [&](int offset, int count, int k) -> std::string {
             std::vector<int> top_ids(k, -1);
             std::vector<float> top_vals(k, -1.0e9f);
@@ -3205,12 +3220,15 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           const int dur_k = std::min(5, dur_bins_used);
           const std::string tok_topk = (tok_k > 0) ? topk_json(tok_offset, token_span, tok_k) : "[]";
           const std::string dur_topk = (dur_k > 0) ? topk_json(dur_offset, dur_bins_used, dur_k) : "[]";
+          const double tok_lse = logsumexp(tok_offset, token_span);
+          const double dur_lse = logsumexp(dur_offset, dur_bins_used);
           dbglog_ndjson(
               "H16",
               "cpp/src/parakeet_trt.cpp:parakeet_push_features:tdt_step",
               "TDT step debug",
               std::string("{\"time_idx\":") + std::to_string(time_idx) +
                   ",\"u\":" + std::to_string(u) +
+                  ",\"y_id\":" + std::to_string(y_id) +
                   ",\"best_tok\":" + std::to_string(best_tok) +
                   ",\"best_tok_v\":" + std::to_string(best_tok_v) +
                   ",\"is_blank\":" + std::string(best_tok == kBlankId ? "true" : "false") +
@@ -3218,16 +3236,21 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   ",\"duration\":" + std::to_string(duration) +
                   ",\"advance\":" + std::to_string(advance) +
                   ",\"blank_dur0_clamped\":" + std::string(blank_dur0_clamped ? "true" : "false") +
+                  ",\"tok_lse\":" + std::to_string(tok_lse) +
+                  ",\"dur_lse\":" + std::to_string(dur_lse) +
                   ",\"tok_topk\":" + tok_topk +
                   ",\"dur_topk\":" + dur_topk + "}");
           std::cerr << "[parakeet_trt] tdt_step time_idx=" << time_idx
                     << " u=" << u
+                    << " y_id=" << y_id
                     << " best_tok=" << best_tok
                     << " best_dur_idx=" << best_dur_idx
                     << " duration=" << duration
                     << " advance=" << advance
                     << " blank=" << (best_tok == kBlankId ? "1" : "0")
                     << " blank_dur0_clamped=" << (blank_dur0_clamped ? "1" : "0")
+                    << " tok_lse=" << tok_lse
+                    << " dur_lse=" << dur_lse
                     << "\n";
           ++debug_tdt_emitted;
         }

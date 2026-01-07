@@ -36,7 +36,8 @@ def load_features_f32(path: str, n_mels: int) -> np.ndarray:
     if raw.size % n_mels != 0:
         raise RuntimeError(f"features size {raw.size} not divisible by n_mels={n_mels}")
     t = raw.size // n_mels
-    return raw.reshape(n_mels, t)
+    # Runtime dumps are time-major [T, C]. Convert to [C, T] for model encoder.
+    return raw.reshape(t, n_mels).T
 
 
 def infer_pred_state(model) -> Tuple[int, int]:
@@ -110,6 +111,13 @@ def topk_list(vec: np.ndarray, k: int) -> List[Dict[str, float]]:
     return out
 
 
+def logsumexp(vec: np.ndarray) -> float:
+    if vec.size == 0:
+        return 0.0
+    m = float(np.max(vec))
+    return float(m + np.log(np.sum(np.exp(vec - m))))
+
+
 def load_contract_heads(path: str) -> Tuple[int, int, List[int], int]:
     if not path or not os.path.exists(path):
         return 0, 8193, [0, 1, 2, 3, 4], 8192
@@ -134,6 +142,7 @@ def main() -> int:
     ap.add_argument("--stream-sim", type=float, default=0.0, help="Chunk size in seconds (if chunk-frames not set)")
     ap.add_argument("--hop-ms", type=float, default=10.0)
     ap.add_argument("--drop-last", action="store_true", help="Drop remainder frames instead of running a short final chunk")
+    ap.add_argument("--debug-first-chunk-stats", action="store_true", help="Print min/max for first chunk features")
     ap.add_argument("--contract", default="contracts/parakeet-tdt-0.6b-v3.contract.json")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--max-steps", type=int, default=0, help="0 = all")
@@ -207,6 +216,10 @@ def main() -> int:
     emitted: List[int] = []
     step_idx = 0
 
+    if args.debug_first_chunk_stats and feats.shape[1] >= chunk_frames:
+        first = feats[:, :chunk_frames]
+        print(f"[tdt_trace] first_chunk min={float(first.min()):.6f} max={float(first.max()):.6f}")
+
     with open(args.out, "w", encoding="utf-8") as out_f:
         header = {
             "type": "meta",
@@ -253,6 +266,8 @@ def main() -> int:
                         best_tok_v = float(tok_logits[best_tok])
                         best_dur_idx = int(np.argmax(dur_logits))
                         duration = int(duration_values[best_dur_idx])
+                        tok_lse = logsumexp(tok_logits)
+                        dur_lse = logsumexp(dur_logits)
                         advance = duration
                         blank_dur0_clamped = False
                         if best_tok == blank_id and duration == 0:
@@ -273,6 +288,8 @@ def main() -> int:
                             "duration": duration,
                             "advance": advance,
                             "blank_dur0_clamped": bool(blank_dur0_clamped),
+                            "tok_lse": tok_lse,
+                            "dur_lse": dur_lse,
                             "tok_topk": topk_list(tok_logits, min(args.token_topk, tok_size)),
                             "dur_topk": topk_list(dur_logits, min(args.dur_topk, dur_size)),
                         }

@@ -1,6 +1,6 @@
 # TDT Trace Parity Report
 
-Status: FAIL (first divergence at step 4).
+Status: FAIL (first divergence at step 0 after feature layout fix).
 
 ## Environment
 - Model: `models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo`
@@ -9,7 +9,7 @@ Status: FAIL (first divergence at step 4).
 
 ## Inputs
 - WAV: `eval/wav/librispeech_dev_gate/dev-clean/1272-128104-0000.wav`
-- Streaming sim: 0.5s (`--stream-sim 0.5`)
+- Streaming sim: 0.5s (`--stream-sim 0.5`) → 48 frames/chunk
 - Feature norm: `per_feature`
 - Punct suppression disabled: `PARAKEET_DISABLE_PUNCT_SUPPRESSION=1`
 - Debug steps: `PARAKEET_DEBUG_TDT_STEPS=80`
@@ -46,17 +46,19 @@ python tools/verify_nemo/compare_tdt_trace.py \
 ```
 
 ## First Divergence
-- Step 4 (`best_tok`):
-  - PyTorch: `8192` (blank)
-  - C++: `7883`
-- Token head top‑k (PyTorch): blank is top‑1; C++ top‑1 is non‑blank with lower absolute logits.
-- Duration head scale differs (PyTorch positive logits vs C++ negative logits).
+- Step 0 (`best_dur_idx`):
+  - PyTorch: `1`
+  - C++: `0`
+- `y_id` matches (`64`, language token), chunk boundaries aligned.
+- Logsumexp check:
+  - PyTorch `tok_lse=-3.67`, `dur_lse=5.37` (raw logits)
+  - C++ `tok_lse=-9.56`, `dur_lse≈0` (duration head appears log‑softmaxed or stale engine)
 
 ## Interpretation
-The mismatch appears **before** decode policy heuristics can explain it and is consistent with
-**encoder output / feature pipeline differences** or **engine mismatch** (TRT encoder built
-from a different export than the current PyTorch model).
+The mismatch appears **before** decode policy heuristics can explain it and persists with
+aligned chunking + priming. The logsumexp disparity strongly suggests a **stale TRT joint engine**
+(built from a log‑softmax export) or a joint graph mismatch, rather than a decode policy bug.
 
 ## Next Actions
-- Run offline encoder parity (PyTorch vs TRT/ORT) using the same dumped features.
-- Ensure encoder engine is rebuilt from the latest ONNX export aligned to the current contract.
+- Rebuild **joint** (and likely predictor) TRT engines from the latest ONNX exports (logits output).
+- Re-run the same 1‑utterance trace; confirm `tok_lse`/`dur_lse` match PyTorch scale and `best_dur_idx` aligns.
