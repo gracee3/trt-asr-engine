@@ -51,9 +51,25 @@ Status: FAIL (transcripts mostly empty; gate blocked).
   ```
 - Score output: `/tmp/stt_suite/gate_norm_per_feature/scores.tsv`
 
+### Mode A (model-matching) re-run (timeout)
+- Command:
+  ```bash
+  LD_LIBRARY_PATH=/home/emmy/git/trt-asr-engine/cpp/build \
+  PARAKEET_FEATURE_NORM=per_feature \
+  python tools/stt_suite/run_suite.py \
+    --manifest eval/manifests/librispeech_dev_gate.tsv \
+    --cli-path rust/target/debug/cli \
+    --model-dir models/parakeet-tdt-0.6b-v3 \
+    --variants base \
+    --rounds 1 \
+    --output-dir /tmp/stt_suite/gate_norm_per_feature_20260107b
+  ```
+- Result: timed out after ~10 minutes (full 100-utterance gate not completed)
+
 ## Blocking Issues
 - Transcripts are empty for most utterances under both normalization modes.
 - The WER gate cannot be used to lock the normalization decision until decode produces non-empty outputs.
+- Full 100-utterance gate re-run timed out under loopback; needs longer run window or a smaller debug manifest.
 
 ## Next Debug Actions
 - Verify TDT decode loop in C++ runtime (blank/duration handling, max symbols per step) against contract.

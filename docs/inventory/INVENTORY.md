@@ -66,6 +66,7 @@ This is a repo scan snapshot for trt-asr-engine. Tree view captured in `docs/inv
   - `PARAKEET_NAN_GUARD_ALWAYS`, `PARAKEET_NAN_GUARD_HALT`.
 - Decode debug:
   - `PARAKEET_DEBUG_BLANK_SCAN`, `PARAKEET_DEBUG_EMIT_TOKENS`, `PARAKEET_DEBUG_JOINT_TOPK`.
+  - `PARAKEET_DEBUG_TDT_STEPS` (log per-step token/duration top-k for a fixed number of steps).
   - `PARAKEET_BLANK_PENALTY`, `PARAKEET_JOINT_DUR_FIRST`, `PARAKEET_Y0_OVERRIDE`.
 - Cache controls:
   - `PARAKEET_CACHE_LEN_OVERRIDE`, `PARAKEET_DISABLE_CACHE`, `PARAKEET_MAX_FRAMES_PER_PUSH`.

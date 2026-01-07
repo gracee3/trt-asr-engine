@@ -2611,6 +2611,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     size_t emit_unk_ct = 0;
     size_t emit_empty_ct = 0;
     size_t emit_punct_ct = 0;
+    const uint64_t debug_tdt_steps = get_env_u64("PARAKEET_DEBUG_TDT_STEPS", 0);
+    uint64_t debug_tdt_emitted = 0;
     {
       static std::once_flag once;
       std::call_once(once, [&]() {
@@ -2658,7 +2660,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                            "joint:enc_in_f32", &session->debug);
       }
 
-      bool emitted_blank = false;  // Track if we hit a blank in the inner loop
+      bool advanced_time = false;  // Track if we advanced time in the inner loop
       for (int u = 0; u < max_symbols_per_timestep && time_idx < T_enc; ++u) {
         // Run joint using the cached predictor output `g` (session->d_joint_pred_in).
         debug_stage_marker("joint:pre_enqueue", &session->debug, session->stream, time_idx);
@@ -3115,10 +3117,16 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           }
         }
         const int duration = kDurationValues[best_dur_idx];
-        // Evidence-driven experiment: duration head behavior appears to over-skip encoder time and suppress
-        // meaningful emissions (we saw frequent duration=4 and almost no tokens). For now, always advance
-        // by 1 on blank so we evaluate each encoder timestep. Keep logging duration for analysis.
-        const int advance = 1;
+        int advance = duration;
+        bool blank_dur0_clamped = false;
+        if (best_tok == kBlankId && duration == 0) {
+          // CONTRACT: disallow blank + duration=0 (must advance time)
+          // SOURCE: docs/txt/2304.06795v2.txt (page 3/23, note after Eq. 6)
+          // WHY: avoid zero-advance blank loops and enforce TDT time progress
+          // TODO: evaluate renormalized duration argmax excluding 0 for blank
+          advance = 1;
+          blank_dur0_clamped = true;
+        }
 
         // #region agent log
         if (dbg_steps < 18) {
@@ -3139,9 +3147,76 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   ",\"suppressed_punct\":" + std::string(suppress_punct ? "true" : "false") +
                   ",\"best_dur_idx\":" + std::to_string(best_dur_idx) +
                   ",\"duration\":" + std::to_string(duration) +
-                  ",\"advance\":" + std::to_string(advance) + "}");
+                  ",\"advance\":" + std::to_string(advance) +
+                  ",\"blank_dur0_clamped\":" + std::string(blank_dur0_clamped ? "true" : "false") + "}");
         }
         // #endregion
+
+        if (debug_tdt_steps > 0 && debug_tdt_emitted < debug_tdt_steps) {
+          auto topk_json = [&](int offset, int count, int k) -> std::string {
+            std::vector<int> top_ids(k, -1);
+            std::vector<float> top_vals(k, -1.0e9f);
+            for (int i = 0; i < count; ++i) {
+              const float v = head_logits[static_cast<size_t>(offset + i)];
+              int insert = -1;
+              for (int j = 0; j < k; ++j) {
+                if (v > top_vals[j]) {
+                  insert = j;
+                  break;
+                }
+              }
+              if (insert >= 0) {
+                for (int j = k - 1; j > insert; --j) {
+                  top_vals[j] = top_vals[j - 1];
+                  top_ids[j] = top_ids[j - 1];
+                }
+                top_vals[insert] = v;
+                top_ids[insert] = i;
+              }
+            }
+            std::string out = "[";
+            for (int j = 0; j < k; ++j) {
+              if (j) out += ",";
+              const int local = top_ids[j];
+              const int global = (local >= 0) ? (offset + local) : -1;
+              out += std::string("{\"local\":") + std::to_string(local) +
+                     ",\"global\":" + std::to_string(global) +
+                     ",\"v\":" + std::to_string(top_vals[j]) + "}";
+            }
+            out += "]";
+            return out;
+          };
+
+          const int tok_k = std::min(5, token_span);
+          const int dur_k = std::min(5, dur_bins_used);
+          const std::string tok_topk = (tok_k > 0) ? topk_json(tok_offset, token_span, tok_k) : "[]";
+          const std::string dur_topk = (dur_k > 0) ? topk_json(dur_offset, dur_bins_used, dur_k) : "[]";
+          dbglog_ndjson(
+              "H16",
+              "cpp/src/parakeet_trt.cpp:parakeet_push_features:tdt_step",
+              "TDT step debug",
+              std::string("{\"time_idx\":") + std::to_string(time_idx) +
+                  ",\"u\":" + std::to_string(u) +
+                  ",\"best_tok\":" + std::to_string(best_tok) +
+                  ",\"best_tok_v\":" + std::to_string(best_tok_v) +
+                  ",\"is_blank\":" + std::string(best_tok == kBlankId ? "true" : "false") +
+                  ",\"best_dur_idx\":" + std::to_string(best_dur_idx) +
+                  ",\"duration\":" + std::to_string(duration) +
+                  ",\"advance\":" + std::to_string(advance) +
+                  ",\"blank_dur0_clamped\":" + std::string(blank_dur0_clamped ? "true" : "false") +
+                  ",\"tok_topk\":" + tok_topk +
+                  ",\"dur_topk\":" + dur_topk + "}");
+          std::cerr << "[parakeet_trt] tdt_step time_idx=" << time_idx
+                    << " u=" << u
+                    << " best_tok=" << best_tok
+                    << " best_dur_idx=" << best_dur_idx
+                    << " duration=" << duration
+                    << " advance=" << advance
+                    << " blank=" << (best_tok == kBlankId ? "1" : "0")
+                    << " blank_dur0_clamped=" << (blank_dur0_clamped ? "1" : "0")
+                    << "\n";
+          ++debug_tdt_emitted;
+        }
 
         if (best_tok != kBlankId) {
           if (debug_emit_tokens) {
@@ -3197,20 +3272,22 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           debug_stage_marker("pred:post_commit", &session->debug, session->stream, time_idx);
 
           y_id = best_tok;
-          continue;  // stay on the same encoder timestep, try emitting more symbols
         }
 
-        // Blank: advance encoder time using duration head.
-        emitted_blank = true;
+        if (advance == 0) {
+          continue;  // duration=0 keeps us on the same encoder timestep
+        }
+
+        // Advance encoder time using the duration head (TDT greedy rule).
         time_idx += advance;
+        advanced_time = true;
 
         break;  // move to next encoder time window
       }
 
-      // Safety: if inner loop exhausted max_symbols_per_timestep without emitting blank,
+      // Safety: if inner loop exhausted max_symbols_per_timestep without advancing time,
       // force time_idx advancement to prevent infinite spin.
-      // This can happen when the model produces pathological output (all non-blank tokens).
-      if (!emitted_blank && time_idx < T_enc) {
+      if (!advanced_time && time_idx < T_enc) {
         // Always log forced advance warnings - important production diagnostic
         std::cerr << "[parakeet_trt] WARN: forced time_idx advance at " << time_idx
                   << " (no blank after " << max_symbols_per_timestep << " symbols)"

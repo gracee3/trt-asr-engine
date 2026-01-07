@@ -56,3 +56,8 @@
   Alternatives: lock to model-matching (`per_feature`) or streaming-safe (`none`).
   Evidence: `docs/VALIDATION_REPORT_WER.md` shows WER 100% (none) and 98.23% (per_feature) on the pinned dev gate.
   Validation: fix decode/output empties and re-run the gate to decide the default.
+
+- Decision: TDT greedy decode advances encoder time by predicted duration for every step; blank+duration=0 is clamped to advance=1.
+  Alternatives: RNNT-style blank-only advance or renormalized duration head for blank.
+  Evidence: TDT Algorithm 2 advances time by duration each step; paper disallows blank+duration=0 without renormalization.
+  Validation: enable `PARAKEET_DEBUG_TDT_STEPS` and confirm time_idx progression + non-empty token emissions on pinned dev-clean utterances.

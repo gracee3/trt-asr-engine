@@ -36,11 +36,11 @@ python -u tools/export_onnx/export.py \
 - external data shards (*.onnx.data or weight files):
 
 ## Hashes
-- encoder.onnx: not captured yet
-- predictor.onnx: not captured yet
-- joint.onnx: not captured yet
-- encoder_streaming.onnx: not captured yet
-- model_meta.json: not captured yet
+- encoder.onnx: `0a37e8fbba247f469c39c582c8c0e2813b4d60172356c6edeff4c45275105110`
+- predictor.onnx: `e5b8f22214be6d6884c56140de37e17a5069da4de77ce92fafd70a619e914eaa`
+- joint.onnx: `7b6f2326ac958bc6ddfa82c07e6d1222ca583f55ccb674474b03a38089ba4071`
+- encoder_streaming.onnx: `0ffac9dfa9c3f72d53f6bb5e511aa5e7b23eb08f5379182ae1db4280a964dbfe`
+- model_meta.json: `d3421f784ac920f2c6452916f7635ea2f0eb196471de31be1475712823537806`
 
 ## Smoke tests
 - ONNX checker: PASS (encoder/predictor/joint/encoder_streaming)
