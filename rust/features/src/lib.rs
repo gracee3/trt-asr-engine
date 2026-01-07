@@ -31,6 +31,17 @@ pub struct LogMelExtractor {
     fft_plan: Arc<dyn realfft::RealToComplex<f32>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NormalizationMode {
+    None,
+    PerFeature,
+}
+
+pub struct FeatureStats {
+    pub mean: Vec<f32>,
+    pub std: Vec<f32>,
+}
+
 impl LogMelExtractor {
     pub fn new(config: FeatureConfig) -> Self {
         let window = hann_window(config.win_length);
@@ -110,6 +121,53 @@ impl LogMelExtractor {
 
     pub fn n_mels(&self) -> usize {
         self.config.n_mels
+    }
+}
+
+pub fn compute_per_feature_stats(features_tc: &[f32], n_mels: usize, frames: usize) -> FeatureStats {
+    let mut mean = vec![0.0f32; n_mels];
+    let mut std = vec![0.0f32; n_mels];
+
+    if frames == 0 || n_mels == 0 {
+        return FeatureStats { mean, std };
+    }
+
+    for t in 0..frames {
+        let base = t * n_mels;
+        for m in 0..n_mels {
+            mean[m] += features_tc[base + m];
+        }
+    }
+    let denom = frames as f32;
+    for m in 0..n_mels {
+        mean[m] /= denom;
+    }
+
+    let denom_std = if frames > 1 { (frames - 1) as f32 } else { 1.0 };
+    for t in 0..frames {
+        let base = t * n_mels;
+        for m in 0..n_mels {
+            let diff = features_tc[base + m] - mean[m];
+            std[m] += diff * diff;
+        }
+    }
+    for m in 0..n_mels {
+        std[m] = (std[m] / denom_std).sqrt() + 1e-5;
+    }
+
+    FeatureStats { mean, std }
+}
+
+pub fn apply_per_feature_norm(features_tc: &mut [f32], n_mels: usize, frames: usize, stats: &FeatureStats) {
+    if frames == 0 || n_mels == 0 {
+        return;
+    }
+    for t in 0..frames {
+        let base = t * n_mels;
+        for m in 0..n_mels {
+            let idx = base + m;
+            features_tc[idx] = (features_tc[idx] - stats.mean[m]) / stats.std[m];
+        }
     }
 }
 

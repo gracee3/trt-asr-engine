@@ -1,7 +1,8 @@
 use clap::Parser;
-use features::{FeatureConfig, LogMelExtractor};
+use features::{FeatureConfig, LogMelExtractor, compute_per_feature_stats, apply_per_feature_norm, NormalizationMode};
 use parakeet_trt::{ParakeetSessionSafe, TranscriptionEvent};
 use serde_json::Value;
+use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::thread;
@@ -41,6 +42,9 @@ struct Args {
 
     #[arg(long, help = "Dump computed features to this file (f32le, [C,T])")]
     dump_features: Option<PathBuf>,
+
+    #[arg(long, value_parser = ["none", "per_feature"], help = "Feature normalization (overrides PARAKEET_FEATURE_NORM)")]
+    feature_norm: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -183,11 +187,22 @@ fn slice_bct_frames(features_bct: &[f32], n_mels: usize, total_frames: usize, st
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let start_time = std::time::Instant::now();
+    let env_norm = env::var("PARAKEET_FEATURE_NORM").ok();
+    let feature_norm = args
+        .feature_norm
+        .or(env_norm)
+        .unwrap_or_else(|| "none".to_string());
+    let feature_norm = match feature_norm.as_str() {
+        "none" => NormalizationMode::None,
+        "per_feature" => NormalizationMode::PerFeature,
+        other => anyhow::bail!("Unsupported feature normalization: {other}"),
+    };
 
     if args.verbose {
         eprintln!("[replay] Input: {:?}", args.input_path);
         eprintln!("[replay] Model: {:?}", args.model_dir);
         eprintln!("[replay] Mode: {}", if args.features_input { "features" } else if args.raw_pcm { "raw_pcm" } else { "wav" });
+        eprintln!("[replay] Feature normalization: {:?}", feature_norm);
     }
 
     // Handle direct feature input (bypass audio loading and feature extraction)
@@ -377,6 +392,17 @@ fn main() -> anyhow::Result<()> {
     let config = FeatureConfig::default();
     let extractor = LogMelExtractor::new(config);
     let n_mels = extractor.n_mels();
+    let mut per_feature_stats = None;
+    let mut offline_features_tc = None;
+
+    if feature_norm == NormalizationMode::PerFeature {
+        let features_tc = extractor.compute(&audio);
+        let total_frames = features_tc.len() / n_mels;
+        per_feature_stats = Some(compute_per_feature_stats(&features_tc, n_mels, total_frames));
+        if args.stream_sim.is_none() {
+            offline_features_tc = Some(features_tc);
+        }
+    }
 
     // 3. Setup Runtime
     let session = ParakeetSessionSafe::new(
@@ -398,10 +424,15 @@ fn main() -> anyhow::Result<()> {
             let end = (pos + samples_per_chunk).min(audio.len());
             let chunk = &audio[pos..end];
 
-            let features_tc = extractor.compute(chunk);
+            let mut features_tc = extractor.compute(chunk);
             let num_frames = features_tc.len() / n_mels;
 
             if num_frames > 0 {
+                if feature_norm == NormalizationMode::PerFeature {
+                    if let Some(stats) = per_feature_stats.as_ref() {
+                        apply_per_feature_norm(&mut features_tc, n_mels, num_frames, stats);
+                    }
+                }
                 let features_bct = frames_major_to_bins_major(&features_tc, n_mels, num_frames);
 
                 if args.dump_features.is_some() {
@@ -452,8 +483,17 @@ fn main() -> anyhow::Result<()> {
         }
     } else {
         // Offline whole file
-        let features_tc = extractor.compute(&audio);
+        let mut features_tc = if let Some(features_tc) = offline_features_tc {
+            features_tc
+        } else {
+            extractor.compute(&audio)
+        };
         let num_frames = features_tc.len() / n_mels;
+        if feature_norm == NormalizationMode::PerFeature {
+            if let Some(stats) = per_feature_stats.as_ref() {
+                apply_per_feature_norm(&mut features_tc, n_mels, num_frames, stats);
+            }
+        }
         let features_bct = frames_major_to_bins_major(&features_tc, n_mels, num_frames);
 
         if args.verbose {
