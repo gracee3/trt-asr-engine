@@ -1,0 +1,40 @@
+{
+  "mode": "closed_loop",
+  "providers": [
+    "CPUExecutionProvider"
+  ],
+  "onnx": "tools/export_onnx/out/encoder_streaming.onnx",
+  "ref": "artifacts/reference/pytorch_reference_4.jsonl",
+  "total_chunks": 4,
+  "passed": 0,
+  "failed": 4,
+  "pass_rate": 0.0,
+  "atol": 0.0001,
+  "rtol": 0.0001,
+  "failures": [
+    {
+      "chunk": 0,
+      "errors": [
+        "cache_last_time_out: max_abs=3.653e-04 mean_abs=1.016e-05 max_rel=1.000e+00"
+      ]
+    },
+    {
+      "chunk": 1,
+      "errors": [
+        "cache_last_time_out: max_abs=1.259e-04 mean_abs=4.347e-06 max_rel=3.017e+00"
+      ]
+    },
+    {
+      "chunk": 2,
+      "errors": [
+        "cache_last_time_out: max_abs=1.104e-04 mean_abs=3.973e-06 max_rel=1.870e+00"
+      ]
+    },
+    {
+      "chunk": 3,
+      "errors": [
+        "cache_last_time_out: max_abs=1.111e-04 mean_abs=3.205e-06 max_rel=1.471e+00"
+      ]
+    }
+  ]
+}

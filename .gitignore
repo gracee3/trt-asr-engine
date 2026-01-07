@@ -23,24 +23,12 @@ cpp/build_mock/
 apps/trt_runtime_smoke/build_real/
 
 out/
-artifacts/
 
-# PyTorch reference data (large JSONL files with base64-encoded tensors)
-pytorch_reference_*.jsonl
+# Artifacts - track parity/diagnostics/stability, ignore large reference data
+artifacts/reference/
 
-# Parity test results
-parity_*chunks_*.json
-cache_time_diagnostic.json
-
-# TRT parity results (when generated)
-trt_parity_*.json
-trt_stability_*.png
 .cargo-target-magnolia/
-
 .cursor
 .vscode
 .claude
 debug_artifacts/
-
-
-����b

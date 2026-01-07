@@ -1,0 +1,22 @@
+{
+  "mode": "functional",
+  "providers": [
+    "CPUExecutionProvider"
+  ],
+  "onnx": "tools/export_onnx/out/encoder_streaming.onnx",
+  "ref": "artifacts/reference/pytorch_reference_4.jsonl",
+  "total_chunks": 4,
+  "passed": 3,
+  "failed": 1,
+  "pass_rate": 75.0,
+  "atol": 0.0001,
+  "rtol": 0.0001,
+  "failures": [
+    {
+      "chunk": 0,
+      "errors": [
+        "cache_last_time_out: max_abs=3.653e-04 mean_abs=1.016e-05 max_rel=1.000e+00"
+      ]
+    }
+  ]
+}

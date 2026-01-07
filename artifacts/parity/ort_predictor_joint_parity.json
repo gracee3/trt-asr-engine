@@ -1,0 +1,50 @@
+{
+  "predictor": {
+    "g": {
+      "ok": true,
+      "stats": {
+        "max_abs": 1.9371509552001953e-07,
+        "mean_abs": 1.421199158357922e-08,
+        "max_rel": 3.976969841586782e-05
+      }
+    },
+    "h_out": {
+      "ok": true,
+      "stats": {
+        "max_abs": 1.4901161193847656e-06,
+        "mean_abs": 4.776664768416827e-08,
+        "max_rel": 1.4448707769423559
+      }
+    },
+    "c_out": {
+      "ok": true,
+      "stats": {
+        "max_abs": 4.827976226806641e-06,
+        "mean_abs": 1.2629377910960016e-07,
+        "max_rel": 1.4448711508141256
+      }
+    }
+  },
+  "joint": {
+    "joint_output": {
+      "ok": true,
+      "stats": {
+        "max_abs": 0.0008544921875,
+        "mean_abs": 0.00015296480021089368,
+        "max_rel": 1.2115357099544742e-06
+      }
+    },
+    "argmax": {
+      "token": {
+        "pt": 8192,
+        "ort": 8192,
+        "match": true
+      },
+      "duration": {
+        "pt": 2,
+        "ort": 2,
+        "match": true
+      }
+    }
+  }
+}

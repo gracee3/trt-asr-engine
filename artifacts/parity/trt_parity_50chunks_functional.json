@@ -1,0 +1,366 @@
+{
+  "mode": "functional",
+  "engine": "out/trt_engines/encoder_streaming_fp32.plan",
+  "ref": "artifacts/reference/pytorch_reference_50.jsonl",
+  "zero_feed_cache": false,
+  "total_chunks": 50,
+  "passed": 45,
+  "failed": 5,
+  "pass_rate": 90.0,
+  "atol": 0.0005,
+  "rtol": 0.001,
+  "cache_atol": 0.1,
+  "timing_ms": {
+    "mean": 21.5442324988544,
+    "p50": 19.66338450438343,
+    "p95": 25.518768416077364,
+    "p99": 53.226897715649
+  },
+  "encoder_output_error_distribution": {
+    "min": 8.237548172473907e-05,
+    "max": 0.0012600868940353394,
+    "mean": 0.00020843608072027565,
+    "p95": 0.0004884215362835672,
+    "p99": 0.0009700886532664287
+  },
+  "chunk_stats": [
+    {
+      "chunk": 0,
+      "encoder_output_max_abs": 0.0012600868940353394,
+      "encoder_output_mean_abs": 0.00015225225425918865,
+      "passed": false
+    },
+    {
+      "chunk": 1,
+      "encoder_output_max_abs": 9.283982217311859e-05,
+      "encoder_output_mean_abs": 1.757424983761524e-05,
+      "passed": true
+    },
+    {
+      "chunk": 2,
+      "encoder_output_max_abs": 0.00019716471433639526,
+      "encoder_output_mean_abs": 4.390498838002799e-05,
+      "passed": true
+    },
+    {
+      "chunk": 3,
+      "encoder_output_max_abs": 0.00015881890431046486,
+      "encoder_output_mean_abs": 3.909306994387407e-05,
+      "passed": true
+    },
+    {
+      "chunk": 4,
+      "encoder_output_max_abs": 0.00015171244740486145,
+      "encoder_output_mean_abs": 3.649964102159231e-05,
+      "passed": true
+    },
+    {
+      "chunk": 5,
+      "encoder_output_max_abs": 0.0001909155398607254,
+      "encoder_output_mean_abs": 3.5231388634926475e-05,
+      "passed": true
+    },
+    {
+      "chunk": 6,
+      "encoder_output_max_abs": 0.00021782517433166504,
+      "encoder_output_mean_abs": 4.179100652734746e-05,
+      "passed": true
+    },
+    {
+      "chunk": 7,
+      "encoder_output_max_abs": 0.00012807233724743128,
+      "encoder_output_mean_abs": 2.723362061907153e-05,
+      "passed": true
+    },
+    {
+      "chunk": 8,
+      "encoder_output_max_abs": 0.00014502555131912231,
+      "encoder_output_mean_abs": 2.7078820519221836e-05,
+      "passed": true
+    },
+    {
+      "chunk": 9,
+      "encoder_output_max_abs": 0.0001477263867855072,
+      "encoder_output_mean_abs": 3.200664995439695e-05,
+      "passed": true
+    },
+    {
+      "chunk": 10,
+      "encoder_output_max_abs": 0.000186186283826828,
+      "encoder_output_mean_abs": 3.0643707110922236e-05,
+      "passed": true
+    },
+    {
+      "chunk": 11,
+      "encoder_output_max_abs": 0.00011763349175453186,
+      "encoder_output_mean_abs": 1.9014550963092347e-05,
+      "passed": true
+    },
+    {
+      "chunk": 12,
+      "encoder_output_max_abs": 0.0001297718845307827,
+      "encoder_output_mean_abs": 3.279015695234477e-05,
+      "passed": true
+    },
+    {
+      "chunk": 13,
+      "encoder_output_max_abs": 8.237548172473907e-05,
+      "encoder_output_mean_abs": 1.7438848527007167e-05,
+      "passed": true
+    },
+    {
+      "chunk": 14,
+      "encoder_output_max_abs": 0.00022565945982933044,
+      "encoder_output_mean_abs": 5.242489841875142e-05,
+      "passed": true
+    },
+    {
+      "chunk": 15,
+      "encoder_output_max_abs": 9.726826101541519e-05,
+      "encoder_output_mean_abs": 2.0461172896446556e-05,
+      "passed": true
+    },
+    {
+      "chunk": 16,
+      "encoder_output_max_abs": 9.747222065925598e-05,
+      "encoder_output_mean_abs": 2.0597335728567145e-05,
+      "passed": true
+    },
+    {
+      "chunk": 17,
+      "encoder_output_max_abs": 0.00032217055559158325,
+      "encoder_output_mean_abs": 6.273987203186948e-05,
+      "passed": false
+    },
+    {
+      "chunk": 18,
+      "encoder_output_max_abs": 0.00015787826851010323,
+      "encoder_output_mean_abs": 3.953836497894159e-05,
+      "passed": true
+    },
+    {
+      "chunk": 19,
+      "encoder_output_max_abs": 0.0006682537496089935,
+      "encoder_output_mean_abs": 0.00014448717032777836,
+      "passed": false
+    },
+    {
+      "chunk": 20,
+      "encoder_output_max_abs": 0.00017743278294801712,
+      "encoder_output_mean_abs": 4.3242071553706296e-05,
+      "passed": true
+    },
+    {
+      "chunk": 21,
+      "encoder_output_max_abs": 0.00012290198355913162,
+      "encoder_output_mean_abs": 2.693596129788034e-05,
+      "passed": true
+    },
+    {
+      "chunk": 22,
+      "encoder_output_max_abs": 0.00017719343304634094,
+      "encoder_output_mean_abs": 4.266131722019395e-05,
+      "passed": true
+    },
+    {
+      "chunk": 23,
+      "encoder_output_max_abs": 0.0002096574753522873,
+      "encoder_output_mean_abs": 4.343327852041057e-05,
+      "passed": true
+    },
+    {
+      "chunk": 24,
+      "encoder_output_max_abs": 0.00012991111725568771,
+      "encoder_output_mean_abs": 2.764612927652621e-05,
+      "passed": true
+    },
+    {
+      "chunk": 25,
+      "encoder_output_max_abs": 0.00021525658667087555,
+      "encoder_output_mean_abs": 5.6163436536138533e-05,
+      "passed": true
+    },
+    {
+      "chunk": 26,
+      "encoder_output_max_abs": 0.0002199159935116768,
+      "encoder_output_mean_abs": 4.9351192505930896e-05,
+      "passed": false
+    },
+    {
+      "chunk": 27,
+      "encoder_output_max_abs": 8.814968168735504e-05,
+      "encoder_output_mean_abs": 1.792138190526149e-05,
+      "passed": true
+    },
+    {
+      "chunk": 28,
+      "encoder_output_max_abs": 0.0001812768168747425,
+      "encoder_output_mean_abs": 4.335724452042555e-05,
+      "passed": true
+    },
+    {
+      "chunk": 29,
+      "encoder_output_max_abs": 0.00018114398699253798,
+      "encoder_output_mean_abs": 3.76720551376053e-05,
+      "passed": true
+    },
+    {
+      "chunk": 30,
+      "encoder_output_max_abs": 9.880214929580688e-05,
+      "encoder_output_mean_abs": 2.4020147735726027e-05,
+      "passed": true
+    },
+    {
+      "chunk": 31,
+      "encoder_output_max_abs": 0.00042294152081012726,
+      "encoder_output_mean_abs": 0.00010109892026122225,
+      "passed": true
+    },
+    {
+      "chunk": 32,
+      "encoder_output_max_abs": 0.0002021249383687973,
+      "encoder_output_mean_abs": 5.00423172846709e-05,
+      "passed": true
+    },
+    {
+      "chunk": 33,
+      "encoder_output_max_abs": 0.00010142102837562561,
+      "encoder_output_mean_abs": 1.435391639681427e-05,
+      "passed": true
+    },
+    {
+      "chunk": 34,
+      "encoder_output_max_abs": 0.00021918490529060364,
+      "encoder_output_mean_abs": 4.0162178724933995e-05,
+      "passed": true
+    },
+    {
+      "chunk": 35,
+      "encoder_output_max_abs": 0.0001599346287548542,
+      "encoder_output_mean_abs": 4.066591041507195e-05,
+      "passed": true
+    },
+    {
+      "chunk": 36,
+      "encoder_output_max_abs": 0.00011765724048018456,
+      "encoder_output_mean_abs": 2.541114875675987e-05,
+      "passed": true
+    },
+    {
+      "chunk": 37,
+      "encoder_output_max_abs": 0.00014271587133407593,
+      "encoder_output_mean_abs": 3.213934738433011e-05,
+      "passed": true
+    },
+    {
+      "chunk": 38,
+      "encoder_output_max_abs": 0.00020731613039970398,
+      "encoder_output_mean_abs": 5.478353248378198e-05,
+      "passed": true
+    },
+    {
+      "chunk": 39,
+      "encoder_output_max_abs": 0.00018253736197948456,
+      "encoder_output_mean_abs": 3.7724738146671655e-05,
+      "passed": true
+    },
+    {
+      "chunk": 40,
+      "encoder_output_max_abs": 8.859485387802124e-05,
+      "encoder_output_mean_abs": 2.3535837017973904e-05,
+      "passed": true
+    },
+    {
+      "chunk": 41,
+      "encoder_output_max_abs": 0.00030889175832271576,
+      "encoder_output_mean_abs": 7.166459751584142e-05,
+      "passed": true
+    },
+    {
+      "chunk": 42,
+      "encoder_output_max_abs": 0.0001399768516421318,
+      "encoder_output_mean_abs": 3.0987251127712057e-05,
+      "passed": true
+    },
+    {
+      "chunk": 43,
+      "encoder_output_max_abs": 0.00014281831681728363,
+      "encoder_output_mean_abs": 3.663366474926377e-05,
+      "passed": true
+    },
+    {
+      "chunk": 44,
+      "encoder_output_max_abs": 0.00014618923887610435,
+      "encoder_output_mean_abs": 2.7451155920843462e-05,
+      "passed": true
+    },
+    {
+      "chunk": 45,
+      "encoder_output_max_abs": 0.0002086237072944641,
+      "encoder_output_mean_abs": 4.0803917785492416e-05,
+      "passed": true
+    },
+    {
+      "chunk": 46,
+      "encoder_output_max_abs": 0.00013256072998046875,
+      "encoder_output_mean_abs": 2.617356682677041e-05,
+      "passed": true
+    },
+    {
+      "chunk": 47,
+      "encoder_output_max_abs": 0.0005419960943982005,
+      "encoder_output_mean_abs": 0.00013172785085835415,
+      "passed": false
+    },
+    {
+      "chunk": 48,
+      "encoder_output_max_abs": 0.0002770461142063141,
+      "encoder_output_mean_abs": 4.2761376534805606e-05,
+      "passed": true
+    },
+    {
+      "chunk": 49,
+      "encoder_output_max_abs": 0.00010277330875396729,
+      "encoder_output_mean_abs": 2.3490301164663663e-05,
+      "passed": true
+    }
+  ],
+  "failures": [
+    {
+      "chunk": 0,
+      "errors": [
+        "encoder_output: max_abs=1.260e-03 mean_abs=1.523e-04 max_rel=2.577e+01",
+        "cache_last_time_out: max_abs=1.188e-01 mean_abs=4.566e-03 max_rel=1.833e+03"
+      ],
+      "encoder_output_max_abs": 0.0012600868940353394
+    },
+    {
+      "chunk": 17,
+      "errors": [
+        "cache_last_time_out: max_abs=1.103e-01 mean_abs=3.152e-03 max_rel=2.865e+02"
+      ],
+      "encoder_output_max_abs": 0.00032217055559158325
+    },
+    {
+      "chunk": 19,
+      "errors": [
+        "encoder_output: max_abs=6.683e-04 mean_abs=1.445e-04 max_rel=5.713e+00"
+      ],
+      "encoder_output_max_abs": 0.0006682537496089935
+    },
+    {
+      "chunk": 26,
+      "errors": [
+        "cache_last_time_out: max_abs=1.186e-01 mean_abs=2.143e-03 max_rel=7.158e+02"
+      ],
+      "encoder_output_max_abs": 0.0002199159935116768
+    },
+    {
+      "chunk": 47,
+      "errors": [
+        "encoder_output: max_abs=5.420e-04 mean_abs=1.317e-04 max_rel=9.229e+00"
+      ],
+      "encoder_output_max_abs": 0.0005419960943982005
+    }
+  ]
+}
