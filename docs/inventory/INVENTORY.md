@@ -33,6 +33,8 @@ This is a repo scan snapshot for trt-asr-engine. Tree view captured in `docs/inv
   - `tools/onnxruntime/onnx_streaming_parity.py` (functional + closed loop).
   - `tools/onnxruntime/onnx_predictor_joint_parity.py` (predictor + joint logits parity).
   - `tools/onnxruntime/diagnose_cache_time_mismatch.py` (cache mismatch diagnostics).
+  - `tools/verify_nemo/tdt_trace.py` (PyTorch TDT decode trace).
+  - `tools/verify_nemo/compare_tdt_trace.py` (trace comparator vs C++).
 - ONNX inspection:
   - `tools/inspect_onnx/check_joint_output.py` (verifies joint output shape + absence of LogSoftmax).
 - TensorRT parity:
@@ -52,6 +54,8 @@ This is a repo scan snapshot for trt-asr-engine. Tree view captured in `docs/inv
 ## Validation + parity harnesses
 - ORT parity: `tools/onnxruntime/onnx_streaming_parity.py` (functional, closed-loop).
 - ORT parity (predictor/joint): `tools/onnxruntime/onnx_predictor_joint_parity.py`.
+- TDT trace: `tools/verify_nemo/tdt_trace.py` (PyTorch reference).
+- TDT trace compare: `tools/verify_nemo/compare_tdt_trace.py`.
 - TRT parity: `tools/tensorrt/trt_streaming_parity.py` (functional, closed-loop).
 - PyTorch reference data: `tools/verify_nemo/streaming_encoder_reference.py` writes JSONL (base64 arrays).
 - Diagnostics: `tools/onnxruntime/diagnose_cache_time_mismatch.py`.

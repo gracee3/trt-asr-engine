@@ -2616,6 +2616,13 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     {
       static std::once_flag once;
       std::call_once(once, [&]() {
+        std::ostringstream dur_vals;
+        dur_vals << "[";
+        for (int i = 0; i < kNumDurations; ++i) {
+          if (i) dur_vals << ",";
+          dur_vals << kDurationValues[i];
+        }
+        dur_vals << "]";
         std::cerr << "[parakeet_trt] joint_slice joint_dim=" << joint_dim
                   << " token_logit_size=" << token_logit_size
                   << " dur_bins=" << dur_bins
@@ -2623,6 +2630,13 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   << " tok_offset=" << tok_offset
                   << " dur_bins_used=" << dur_bins_used
                   << " token_span=" << token_span
+                  << "\n";
+        std::cerr << "[parakeet_trt] joint_contract blank_id=" << kBlankId
+                  << " token_head_size=" << token_span
+                  << " tok_offset=" << tok_offset
+                  << " dur_offset=" << dur_offset
+                  << " dur_bins_used=" << dur_bins_used
+                  << " duration_values=" << dur_vals.str()
                   << "\n";
         if (dur_bins > 0 && dur_bins != kNumDurations) {
           std::cerr << "[parakeet_trt] WARN: dur_bins mismatch runtime=" << dur_bins
