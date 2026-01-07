@@ -60,11 +60,12 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - `encoder_output` shape: `docs/runtime_contract.md` -> `[B, 1024, T_enc]`.
 
 ### Encoder IO (streaming + caches)
-- Cache input/output shapes: `contracts/encoder_streaming.contract.json` (legacy chunk-isolated contract; shapes still valid).
-- `valid_out_len=1` expectation: `audit_model_arch.json` -> `encoder.streaming_cfg.valid_out_len` (re-validate after stateful export).
-- Streaming chunk params (`chunk_size`, `shift_size`, `cache_drop_size`, `pre_encode_cache_size`, `drop_extra_pre_encoded`): `audit_model_arch.json` -> `encoder.streaming_cfg`.
+- Cache input/output shapes: `tools/export_onnx/out/encoder_streaming.onnx` IO summary (batch-first cache layout).
+- `valid_out_len=2`: `encoder.streaming_cfg.valid_out_len` after `setup_streaming_params` with clamped cache_drop_size (see `tools/verify_nemo/streaming_encoder_cache.py` run logs).
+- Streaming chunk params (`chunk_size`, `shift_size`, `cache_drop_size`, `pre_encode_cache_size`, `drop_extra_pre_encoded`): `encoder.streaming_cfg` after `setup_streaming_params` (see `tools/verify_nemo/streaming_encoder_cache.py` run logs).
+- `cache_drop_size` clamp (72 → 71): derived by measuring pre-encode length for chunk0 (577/584 frames) minus `drop_extra_pre_encoded=2` to avoid negative cache_len (see `tools/verify_nemo/streaming_encoder_cache.py` output + NeMo pre_encode behavior).
 - Cache semantics + need for context-limited caching: `docs/txt/2312.17279v3.txt` (page 4/8).
-- Stateful cache carryover behavior: implemented in NeMo `ConformerEncoder.forward_internal` and `streaming_post_process` (`nemo/collections/asr/modules/conformer_encoder.py`); requires re-export and parity validation.
+- Stateful cache carryover behavior: implemented in NeMo `ConformerEncoder.forward_internal` and `streaming_post_process` (`nemo/collections/asr/modules/conformer_encoder.py`); validated via ORT closed-loop parity on `encoder_streaming.onnx`.
 
 ### Predictor
 - `pred_hidden`: `model_config.yaml` -> `model_defaults.pred_hidden` (640) and `decoder.prednet.pred_hidden`.
@@ -91,8 +92,6 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - TRT acceptance guidance: `TRT_INTEGRATION_CHECKLIST.md` and `ONNX_ORT_PARITY_README.md`.
 
 ## Provenance gaps to close
-- Re-export `joint.onnx` without `LogSoftmax` and verify output node is linear logits.
-- Re-export streaming encoder with stateful cache carryover and validate `cache_last_channel_len_out` behavior.
 - Resolve cache size mismatch: `last_channel_cache_size=10000` (NeMo config) vs `cache_size=256` (streaming export).
 - Decide blank + duration=0 handling policy for decode (paper allows renorm; runtime currently uses a heuristic).
 - Confirm predictor cell type (LSTM vs other) from NeMo modules.

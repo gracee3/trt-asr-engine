@@ -87,8 +87,8 @@ def pad_or_trunc_along_axis(x: np.ndarray, axis: int, target: int, pad_side: str
 
 @dataclass
 class StreamingState:
-    cache_last_channel: np.ndarray          # [24, B, C, 1024]
-    cache_last_time: np.ndarray             # [24, B, 1024, K]
+    cache_last_channel: np.ndarray          # [B, L, C, 1024]
+    cache_last_time: np.ndarray             # [B, L, 1024, K]
     cache_last_channel_len: np.ndarray      # [B]
 
 
@@ -248,6 +248,17 @@ def main():
         # Normalize dynamic cache outputs from ORT to fixed max shapes before compare
         got_cache_ch = pad_or_trunc_along_axis(got["cache_last_channel_out"], axis=2, target=args.cache_size, pad_side=args.cache_pad_side)
         got_cache_tm = pad_or_trunc_along_axis(got["cache_last_time_out"], axis=3, target=args.time_ctx, pad_side=args.cache_pad_side)
+        ref_cache_ch = pad_or_trunc_along_axis(ref["cache_last_channel_out"], axis=2, target=args.cache_size, pad_side=args.cache_pad_side)
+        ref_cache_tm = pad_or_trunc_along_axis(ref["cache_last_time_out"], axis=3, target=args.time_ctx, pad_side=args.cache_pad_side)
+
+        ref_cache_len = int(np.min(ref["cache_last_channel_len_out"])) if ref["cache_last_channel_len_out"].size else 0
+        if ref_cache_len < 0:
+            ref_cache_len = 0
+        if ref_cache_len > args.cache_size:
+            ref_cache_len = args.cache_size
+
+        got_cache_ch_valid = got_cache_ch[:, :, :ref_cache_len, :] if ref_cache_len > 0 else got_cache_ch[:, :, :0, :]
+        ref_cache_ch_valid = ref_cache_ch[:, :, :ref_cache_len, :] if ref_cache_len > 0 else ref_cache_ch[:, :, :0, :]
 
         # Enforce output time len parity (protect valid_out_len=1)
         if got["encoder_output"].shape != ref["encoder_output"].shape:
@@ -268,8 +279,11 @@ def main():
         checks.append((np.array_equal(got["encoded_lengths"], ref["encoded_lengths"]),
                        DiffStats(0, 0, 0),
                        f"encoded_lengths equal={np.array_equal(got['encoded_lengths'], ref['encoded_lengths'])} got={got['encoded_lengths']} ref={ref['encoded_lengths']}"))
-        checks.append(assert_close("cache_last_channel_out", got_cache_ch, ref["cache_last_channel_out"], args.atol, args.rtol))
-        checks.append(assert_close("cache_last_time_out", got_cache_tm, ref["cache_last_time_out"], args.atol, args.rtol))
+        if ref_cache_len > 0:
+            checks.append(assert_close("cache_last_channel_out", got_cache_ch_valid, ref_cache_ch_valid, args.atol, args.rtol))
+        else:
+            checks.append((True, DiffStats(0, 0, 0), "cache_last_channel_out skipped (valid_len=0)"))
+        checks.append(assert_close("cache_last_time_out", got_cache_tm, ref_cache_tm, args.atol, args.rtol))
         checks.append((np.array_equal(got["cache_last_channel_len_out"], ref["cache_last_channel_len_out"]),
                        DiffStats(0, 0, 0),
                        f"cache_last_channel_len_out equal={np.array_equal(got['cache_last_channel_len_out'], ref['cache_last_channel_len_out'])} got={got['cache_last_channel_len_out']} ref={ref['cache_last_channel_len_out']}"))

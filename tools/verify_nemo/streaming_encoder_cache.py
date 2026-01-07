@@ -93,6 +93,70 @@ def _infer_chunk_shift_steps(encoder, streaming_cfg):
                 shift_steps = None
     return chunk_steps, shift_steps
 
+def _min_streaming_chunk_size(cfg):
+    if cfg is None:
+        return None
+    chunk_size = getattr(cfg, "chunk_size", None)
+    if chunk_size is None:
+        return None
+    if isinstance(chunk_size, (list, tuple)):
+        return int(min(chunk_size)) if chunk_size else None
+    return int(chunk_size)
+
+def _compute_pre_encode_len(encoder, feature_dim: int, chunk_len: int, device):
+    if not hasattr(encoder, "pre_encode"):
+        return None
+    dummy = torch.randn(1, feature_dim, chunk_len, device=device)
+    length = torch.tensor([chunk_len], dtype=torch.int64, device=device)
+    with torch.no_grad():
+        if isinstance(encoder.pre_encode, torch.nn.Linear):
+            length_out = length
+        else:
+            _, length_out = encoder.pre_encode(x=dummy.transpose(1, 2), lengths=length)
+    try:
+        return int(length_out.item())
+    except Exception:
+        return None
+
+def _clamp_cache_drop_size(encoder, cfg, cache_drop_size, feature_dim, device):
+    if cache_drop_size is None or cfg is None:
+        return cache_drop_size
+    chunk_min = _min_streaming_chunk_size(cfg)
+    if chunk_min is None or chunk_min <= 0:
+        return cache_drop_size
+    pre_len = _compute_pre_encode_len(encoder, feature_dim, chunk_min, device)
+    if pre_len is None:
+        return cache_drop_size
+    drop_extra = getattr(cfg, "drop_extra_pre_encoded", 0) or 0
+    min_len = max(pre_len - int(drop_extra), 0)
+    if cache_drop_size > min_len:
+        print(
+            f"WARN: cache_drop_size={cache_drop_size} exceeds pre-encoded length after drop_extra_pre_encoded "
+            f"({min_len}); clamping to {min_len} to avoid negative cache_len."
+        )
+        return min_len
+    return cache_drop_size
+
+def pad_or_trunc_tensor(x, axis, target):
+    if not torch.is_tensor(x):
+        return x
+    cur = x.size(axis)
+    if cur == target:
+        return x
+    if cur > target:
+        return x.narrow(axis, 0, target)
+    new_shape = list(x.shape)
+    new_shape[axis] = target
+    out = x.new_zeros(new_shape)
+    out.narrow(axis, 0, cur).copy_(x)
+    return out
+
+def normalize_cache_state(cache_state, cache_size, time_ctx):
+    cache_last_channel, cache_last_time, cache_last_channel_len = cache_state
+    cache_last_channel = pad_or_trunc_tensor(cache_last_channel, axis=2, target=cache_size)
+    cache_last_time = pad_or_trunc_tensor(cache_last_time, axis=3, target=time_ctx)
+    return cache_last_channel, cache_last_time, cache_last_channel_len
+
 
 def _call_setup_streaming_params(encoder):
     if not hasattr(encoder, "setup_streaming_params"):
@@ -153,7 +217,7 @@ def _call_get_initial_cache_state(encoder, batch_size):
     return fn(batch_size)
 
 
-def _call_cache_aware_stream_step(encoder, x, x_len, cache_state):
+def _call_cache_aware_stream_step(encoder, x, x_len, cache_state, keep_all_outputs=None):
     cache_last_channel, cache_last_time, cache_last_channel_len = cache_state
     fn = encoder.cache_aware_stream_step
     sig = inspect.signature(fn)
@@ -184,6 +248,8 @@ def _call_cache_aware_stream_step(encoder, x, x_len, cache_state):
             kwargs[cache_time_name] = cache_last_time
         if cache_len_name:
             kwargs[cache_len_name] = cache_last_channel_len
+        if keep_all_outputs is not None and "keep_all_outputs" in names:
+            kwargs["keep_all_outputs"] = keep_all_outputs
 
         missing = [
             p.name
@@ -199,6 +265,8 @@ def _call_cache_aware_stream_step(encoder, x, x_len, cache_state):
 
     # Fallback to positional, assuming standard ordering.
     if len(params) >= 5:
+        if keep_all_outputs is not None and "keep_all_outputs" in names:
+            return fn(x, x_len, cache_last_channel, cache_last_time, cache_last_channel_len, keep_all_outputs=keep_all_outputs)
         return fn(x, x_len, cache_last_channel, cache_last_time, cache_last_channel_len)
     if len(params) == 4:
         return fn(x, x_len, cache_last_channel, cache_last_time)
@@ -269,6 +337,11 @@ def _extract_cache_state(step_out):
         )
     return step_out[2], step_out[3], step_out[4]
 
+def _normalize_streaming_outputs(step_out):
+    if not isinstance(step_out, (tuple, list)) or len(step_out) < 5:
+        raise RuntimeError(f"Expected >=5 streaming outputs, got {type(step_out)} len={len(step_out) if isinstance(step_out, (tuple, list)) else 'n/a'}")
+    return step_out[0], step_out[1], step_out[2], step_out[3], step_out[4]
+
 
 def _assert_cache_len_ok(cache_len):
     if not torch.is_tensor(cache_len):
@@ -294,6 +367,7 @@ def main():
     parser.add_argument("--model", required=True, help="Path to .nemo or HF model name")
     parser.add_argument("--device", default="cuda", help="cuda or cpu")
     parser.add_argument("--cache-size", type=int, default=256)
+    parser.add_argument("--time-ctx", type=int, default=4, help="Cache time context (conv kernel-1)")
     parser.add_argument("--cache-drop-size", type=int, default=-1, help="Override streaming_cfg.cache_drop_size (>=0)")
     parser.add_argument("--chunk-len", type=int, default=0, help="Feature frames per chunk")
     parser.add_argument("--num-chunks", type=int, default=3)
@@ -305,6 +379,7 @@ def main():
     parser.add_argument("--use-streaming-cfg-schedule", action="store_true", help="Use streaming_cfg chunk/shift/pre-encode schedule")
     parser.add_argument("--ab-test-chunk", type=int, default=-1, help="Run cache usefulness A/B test at this chunk index")
     parser.add_argument("--skip-setup-streaming-params", action="store_true", help="Skip encoder.setup_streaming_params call")
+    parser.add_argument("--force-postprocess", action="store_true", help="Apply streaming_post_process after cache_aware_stream_step")
     parser.add_argument("--log-every", type=int, default=1, help="Log verbose chunk details every N chunks")
     parser.add_argument("--jsonl-out", type=str, default="", help="Write per-chunk summary JSONL to this path")
     args = parser.parse_args()
@@ -322,7 +397,9 @@ def main():
     device = torch.device(args.device)
     model = model.to(device)
 
+    feature_dim = int(model.cfg.preprocessor.features)
     encoder = model.encoder
+    use_export_interface = hasattr(encoder, "forward_for_export")
 
     def _apply_cache_drop_size(encoder, cache_drop_size):
         if not hasattr(encoder, "streaming_cfg") or cache_drop_size is None:
@@ -342,6 +419,7 @@ def main():
     if hasattr(encoder, "get_initial_cache_state"):
         _print_sig("encoder.get_initial_cache_state", encoder.get_initial_cache_state)
 
+    cache_drop_size_value = None
     if hasattr(encoder, "streaming_cfg"):
         cfg = encoder.streaming_cfg
         print(f"Original streaming_cfg: {cfg}")
@@ -365,6 +443,16 @@ def main():
                 cfg.cache_drop_size = int(args.cache_drop_size)
         if args.cache_drop_size >= 0:
             _apply_cache_drop_size(encoder, int(args.cache_drop_size))
+        cache_drop_size_value = getattr(encoder.streaming_cfg, "cache_drop_size", None)
+        safe_drop = _clamp_cache_drop_size(encoder, encoder.streaming_cfg, cache_drop_size_value, feature_dim, device)
+        if safe_drop is not None and safe_drop != cache_drop_size_value:
+            if dataclasses.is_dataclass(encoder.streaming_cfg):
+                encoder.streaming_cfg = dataclasses.replace(encoder.streaming_cfg, cache_drop_size=safe_drop)
+            else:
+                if hasattr(encoder.streaming_cfg, "cache_drop_size"):
+                    encoder.streaming_cfg.cache_drop_size = safe_drop
+            _apply_cache_drop_size(encoder, int(safe_drop))
+            cache_drop_size_value = safe_drop
         print(f"Updated streaming_cfg: {encoder.streaming_cfg}")
     else:
         print("WARN: encoder has no streaming_cfg; cache-aware streaming may be unavailable.")
@@ -374,11 +462,27 @@ def main():
         # setup_streaming_params resets streaming_cfg; reapply the cache size override.
         if hasattr(encoder, "streaming_cfg") and hasattr(encoder.streaming_cfg, "last_channel_cache_size"):
             encoder.streaming_cfg.last_channel_cache_size = args.cache_size
-        if args.cache_drop_size >= 0:
-            _apply_cache_drop_size(encoder, int(args.cache_drop_size))
+        if cache_drop_size_value is not None and hasattr(encoder, "streaming_cfg"):
+            if dataclasses.is_dataclass(encoder.streaming_cfg):
+                encoder.streaming_cfg = dataclasses.replace(encoder.streaming_cfg, cache_drop_size=cache_drop_size_value)
+            else:
+                if hasattr(encoder.streaming_cfg, "cache_drop_size"):
+                    encoder.streaming_cfg.cache_drop_size = cache_drop_size_value
+            _apply_cache_drop_size(encoder, int(cache_drop_size_value))
+        post_safe = _clamp_cache_drop_size(encoder, getattr(encoder, "streaming_cfg", None), cache_drop_size_value, feature_dim, device)
+        if post_safe is not None and post_safe != cache_drop_size_value:
+            if dataclasses.is_dataclass(encoder.streaming_cfg):
+                encoder.streaming_cfg = dataclasses.replace(encoder.streaming_cfg, cache_drop_size=post_safe)
+            else:
+                if hasattr(encoder.streaming_cfg, "cache_drop_size"):
+                    encoder.streaming_cfg.cache_drop_size = post_safe
+            _apply_cache_drop_size(encoder, int(post_safe))
+            cache_drop_size_value = post_safe
+            _call_setup_streaming_params(encoder)
+            if hasattr(encoder.streaming_cfg, "last_channel_cache_size"):
+                encoder.streaming_cfg.last_channel_cache_size = args.cache_size
         print(f"Post-setup streaming_cfg: {encoder.streaming_cfg}")
 
-    feature_dim = int(model.cfg.preprocessor.features)
     default_chunk_len = args.chunk_len or _select_chunk_len(
         getattr(encoder, "streaming_cfg", None), fallback=584
     )
@@ -493,6 +597,13 @@ def main():
         cache_state = tuple(
             t.to(device) if torch.is_tensor(t) else t for t in cache_state
         )
+        if use_export_interface:
+            cache_state = (
+                cache_state[0].transpose(0, 1).contiguous(),
+                cache_state[1].transpose(0, 1).contiguous(),
+                cache_state[2],
+            )
+        cache_state = normalize_cache_state(cache_state, args.cache_size, args.time_ctx)
         _describe_value("initial_cache_state", cache_state)
 
         if args.use_streaming_cfg_schedule:
@@ -501,6 +612,32 @@ def main():
         else:
             schedule = None
             feature_buffer = torch.randn(1, feature_dim, chunk_len, device=device)
+
+        def _run_step(x, x_len, cache_state):
+            step_start = time.perf_counter()
+            if use_export_interface:
+                out = encoder.forward_for_export(
+                    x,
+                    x_len,
+                    cache_last_channel=cache_state[0],
+                    cache_last_time=cache_state[1],
+                    cache_last_channel_len=cache_state[2],
+                )
+            else:
+                out = _call_cache_aware_stream_step(encoder, x, x_len, cache_state, keep_all_outputs=False)
+            step_ms = (time.perf_counter() - step_start) * 1000.0
+
+            post_ms = 0.0
+            if not use_export_interface and args.force_postprocess:
+                post_start = time.perf_counter()
+                out = _call_streaming_post_process(encoder, out)
+                post_ms = (time.perf_counter() - post_start) * 1000.0
+
+            out = _normalize_streaming_outputs(out)
+            cache_last_channel_out = pad_or_trunc_tensor(out[2], axis=2, target=args.cache_size)
+            cache_last_time_out = pad_or_trunc_tensor(out[3], axis=3, target=args.time_ctx)
+            out = (out[0], out[1], cache_last_channel_out, cache_last_time_out, out[4])
+            return out, step_ms, post_ms
 
         with torch.no_grad():
             for idx in range(num_chunks):
@@ -523,20 +660,13 @@ def main():
                             f"slice=[{item['slice_start']}, {item['slice_end']})"
                         )
 
+                cache_state = normalize_cache_state(cache_state, args.cache_size, args.time_ctx)
                 cache_len_in = _scalar_int(cache_state[2]) if isinstance(cache_state, (tuple, list)) and len(cache_state) > 2 else None
 
-                step_start = time.perf_counter()
-                step_out = _call_cache_aware_stream_step(encoder, x, x_len, cache_state)
-                step_ms = (time.perf_counter() - step_start) * 1000.0
+                step_out, step_ms, post_ms = _run_step(x, x_len, cache_state)
                 if log_this:
                     _describe_value("cache_aware_stream_step out", step_out)
-
-                post_start = time.perf_counter()
-                post_out = _call_streaming_post_process(encoder, step_out)
-                post_ms = (time.perf_counter() - post_start) * 1000.0
-                if post_out is not step_out:
-                    if log_this:
-                        _describe_value("streaming_post_process out", post_out)
+                post_out = step_out
 
                 ab_diff = None
                 if args.ab_test_chunk == idx:
@@ -544,8 +674,8 @@ def main():
                     reset_cache = tuple(
                         t.to(device) if torch.is_tensor(t) else t for t in reset_cache
                     )
-                    step_out_reset = _call_cache_aware_stream_step(encoder, x, x_len, reset_cache)
-                    post_out_reset = _call_streaming_post_process(encoder, step_out_reset)
+                    reset_cache = normalize_cache_state(reset_cache, args.cache_size, args.time_ctx)
+                    post_out_reset, _, _ = _run_step(x, x_len, reset_cache)
                     print("A/B test (threaded vs reset caches):")
                     if isinstance(post_out, (tuple, list)) and isinstance(post_out_reset, (tuple, list)):
                         ab_diff = {
@@ -607,7 +737,7 @@ def main():
                     }
                 _write_jsonl(jsonl_handle, record)
 
-                cache_state = _extract_cache_state(post_out)
+                cache_state = (post_out[2], post_out[3], post_out[4])
                 if log_this:
                     _describe_value("next_cache_state", cache_state)
                 if not args.no_assert_cache_len:

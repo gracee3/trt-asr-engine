@@ -64,14 +64,14 @@ def run_chunk(sess: ort.InferenceSession, audio: np.ndarray, length: np.ndarray,
 def check1_per_axis_error(got: np.ndarray, ref: np.ndarray, axis_name: str) -> Dict:
     """
     Check 1: Is the mismatch mostly in one side of the K axis?
-    Shape: [24, B, 1024, K] where K typically <=4
+    Shape: [B, L, 1024, K] where K typically <=4
     Analyze errors per k=0,1,2,3 to detect padding-side issues.
     """
     print(f"\n{'='*60}")
     print(f"CHECK 1: Per-{axis_name} axis error distribution")
     print(f"{'='*60}")
 
-    # Assume shape is [24, B, 1024, K]
+    # Assume shape is [B, L, 1024, K]
     assert got.ndim == 4 and ref.ndim == 4, "Expected 4D tensor"
     K = min(got.shape[3], ref.shape[3])
 

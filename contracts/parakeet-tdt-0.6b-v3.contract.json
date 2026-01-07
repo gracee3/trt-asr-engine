@@ -100,12 +100,14 @@
         {
           "name": "cache_last_channel",
           "dtype": "float32",
-          "shape": [24, "B", 256, 1024]
+          "shape": ["B", 24, 256, 1024],
+          "layout": "BLTD"
         },
         {
           "name": "cache_last_time",
           "dtype": "float32",
-          "shape": [24, "B", 1024, 4]
+          "shape": ["B", 24, 1024, 4],
+          "layout": "BLDK"
         },
         {
           "name": "cache_last_channel_len",
@@ -128,12 +130,14 @@
         {
           "name": "cache_last_channel_out",
           "dtype": "float32",
-          "shape": [24, "B", "C_out", 1024]
+          "shape": ["B", 24, "C_out", 1024],
+          "layout": "BLTD"
         },
         {
           "name": "cache_last_time_out",
           "dtype": "float32",
-          "shape": [24, "B", 1024, "K_out"]
+          "shape": ["B", 24, 1024, "K_out"],
+          "layout": "BLDK"
         },
         {
           "name": "cache_last_channel_len_out",
@@ -238,13 +242,16 @@
   },
   "streaming": {
     "mode": "stateful_cache",
-    "valid_out_len": 1,
+    "valid_out_len": 2,
     "cache_len_expected": "dynamic",
     "cache_len_bounds": {"min": 0, "max": 256},
     "cache_len_behavior": "non-decreasing until saturated when cache_drop_size < max_audio_length",
+    "cache_layout": "batch_first",
+    "cache_valid_region": "cache_last_channel_len_out defines valid prefix length along cache_last_channel_out axis=2",
+    "cache_pad": {"side": "right", "value": 0},
     "chunk_size": [577, 584],
-    "shift_size": [1, 8],
-    "cache_drop_size": 72,
+    "shift_size": [9, 16],
+    "cache_drop_size": 71,
     "pre_encode_cache_size": [0, 9],
     "drop_extra_pre_encoded": 2,
     "cache": {

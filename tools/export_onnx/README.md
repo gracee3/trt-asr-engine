@@ -62,14 +62,14 @@ python -u export.py \
 - **Streaming Encoder**:
   - Inputs:
     - `audio_signal [B, 128, T]` and `length [B]`
-    - `cache_last_channel [L, B, cache_T, 1024]`
-    - `cache_last_time [L, B, 1024, C]`
+    - `cache_last_channel [B, L, cache_T, 1024]`
+    - `cache_last_time [B, L, 1024, C]`
     - `cache_last_channel_len [B]`
   - Outputs:
     - `encoder_output [B, 1024, T_enc]`
     - `encoded_lengths [B]`
-    - `cache_last_channel_out [L, B, cache_T, 1024]`
-    - `cache_last_time_out [L, B, 1024, C]`
+    - `cache_last_channel_out [B, L, cache_T, 1024]`
+    - `cache_last_time_out [B, L, 1024, C]`
     - `cache_last_channel_len_out [B]`
 - **Predictor**:
   - Inputs:
@@ -108,6 +108,7 @@ python -u export.py \
 - Dynamic axes are enabled for the time/token dimensions unless `--fixed` is set.
 - The export writes `model_meta.json`, `vocab.txt` (if available), and best-effort `tokenizer.model`.
 - **Joint output is raw logits** (no log-softmax). Runtime should split token vs duration heads and apply per-head softmax only when probabilities are required.
+- Streaming export clamps `cache_drop_size` if it would yield negative cache lengths on chunk 0 (after `drop_extra_pre_encoded`).
 
 ## Validation
 After each export, `export.py` runs:

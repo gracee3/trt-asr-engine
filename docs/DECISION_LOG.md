@@ -9,12 +9,12 @@
 - Decision: Default joint layout is token-first, duration-last.
   Alternatives: duration-first layout via runtime switch.
   Evidence: NeMo TDT loss slices `acts[..., :-n_durations]` vs `acts[..., -n_durations:]` in `nemo/collections/asr/losses/rnnt_pytorch.py`; `model_config.yaml` sets `joint.num_extra_outputs=5` and `loss.tdt_kwargs.durations=[0,1,2,3,4]`; `tools/export_onnx/out/joint.onnx` output is a single linear of size 8198 (no concat).
-  Validation: joint ONNX inspected (LogSoftmax axis=-1 output), layout consistent with durations appended at tail; re-export to logits pending, runtime toggle remains for diagnostics.
+  Validation: joint re-exported to raw logits (no LogSoftmax); output node is linear/add with size 8198; layout consistent with durations appended at tail.
 
-- Decision: Treat current streaming export as chunk-isolated (`cache_len=0`).
-  Alternatives: true stateful cache carryover.
-  Evidence: `ONNX_ORT_PARITY_README.md` and `ONNX_PARITY_RESULTS.md` show `cache_last_channel_len_out == 0`.
-  Validation: Re-export stateful streaming encoder and re-run closed-loop parity.
+- Decision: Standardize streaming cache interface as batch-first, fixed-size padded caches + explicit `cache_last_channel_len_out` valid length.
+  Alternatives: layer-first cache layout or ragged cache tensors.
+  Evidence: NeMo `input_types_for_export` uses batch-first cache tensors; ORT parity aligns when caches are padded to `cache_size` and valid length is used to compare.
+  Validation: closed-loop ORT parity passes for 4 chunks with `cache_last_channel_len_out` monotonic and cache shape alignment.
 
 - Decision: Decode guard `max_symbols_per_timestep=8` is provisional.
   Alternatives: derive from paper or make configurable from contract.
@@ -34,4 +34,9 @@
 - Decision: Target true stateful streaming with cache carryover.
   Alternatives: keep chunk-isolated streaming (`cache_len_out == 0`).
   Evidence: streaming paper requires cache/context discipline for equivalence; NeMo `ConformerEncoder` implements cache carryover when `cache_last_channel_len` is nonzero.
-  Validation: re-export streaming encoder, generate reference JSONL with nonzero cache_len, and pass closed-loop parity with cache feedback.
+  Validation: re-export streaming encoder, generate reference JSONL with nonzero cache_len, and pass closed-loop parity with cache feedback (ORT).
+
+- Decision: Clamp `cache_drop_size` to avoid negative cache lengths on chunk 0.
+  Alternatives: accept negative cache_len or disable `drop_extra_pre_encoded`.
+  Evidence: pre-encode length for chunk0 (577/584 frames) is 73; after `drop_extra_pre_encoded=2`, max usable length is 71; `cache_drop_size=72` yields negative cache_len.
+  Validation: clamp to 71 → `cache_last_channel_len_out` starts at 0 and increases (0,2,4,6) in closed-loop parity.

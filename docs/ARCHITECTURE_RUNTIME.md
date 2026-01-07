@@ -45,8 +45,8 @@ Key crates:
 ## Streaming state model
 Single struct (per session) to carry all mutable state:
 - Encoder caches:
-  - `cache_last_channel` [L, B, C, D]
-  - `cache_last_time` [L, B, D, K]
+  - `cache_last_channel` [B, L, C, D]
+  - `cache_last_time` [B, L, D, K]
   - `cache_last_channel_len` [B]
   - Cache tensors are carried across chunks; `cache_last_channel_len` tracks valid cache depth.
 - Predictor state:

@@ -105,6 +105,53 @@ def _apply_cache_drop_size_override(encoder, cache_drop_size: int):
     except Exception as exc:
         logger.warning(f"Failed to apply cache_drop_size override to encoder layers: {exc}")
 
+def _min_streaming_chunk_size(cfg):
+    if cfg is None:
+        return None
+    chunk_size = getattr(cfg, "chunk_size", None)
+    if chunk_size is None:
+        return None
+    if isinstance(chunk_size, (list, tuple)):
+        return int(min(chunk_size)) if chunk_size else None
+    return int(chunk_size)
+
+def _compute_pre_encode_len(encoder, feature_dim: int, chunk_len: int, device):
+    if not hasattr(encoder, "pre_encode"):
+        return None
+    dummy = torch.randn(1, feature_dim, chunk_len, device=device)
+    length = torch.tensor([chunk_len], dtype=torch.int64, device=device)
+    with torch.no_grad():
+        if isinstance(encoder.pre_encode, torch.nn.Linear):
+            length_out = length
+        else:
+            _, length_out = encoder.pre_encode(x=dummy.transpose(1, 2), lengths=length)
+    try:
+        return int(length_out.item())
+    except Exception:
+        return None
+
+def _clamp_cache_drop_size(encoder, cfg, cache_drop_size, feature_dim, device):
+    if cache_drop_size is None or cfg is None:
+        return cache_drop_size
+    chunk_min = _min_streaming_chunk_size(cfg)
+    if chunk_min is None or chunk_min <= 0:
+        return cache_drop_size
+    pre_len = _compute_pre_encode_len(encoder, feature_dim, chunk_min, device)
+    if pre_len is None:
+        return cache_drop_size
+    drop_extra = getattr(cfg, "drop_extra_pre_encoded", 0) or 0
+    min_len = max(pre_len - int(drop_extra), 0)
+    if cache_drop_size > min_len:
+        logger.warning(
+            "cache_drop_size=%s exceeds pre-encoded length after drop_extra_pre_encoded (%s); "
+            "clamping to %s to avoid negative cache_len.",
+            cache_drop_size,
+            min_len,
+            min_len,
+        )
+        return min_len
+    return cache_drop_size
+
 def _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size, cache_drop_size):
     cfg = getattr(encoder, "streaming_cfg", None)
     if cfg is None:
@@ -188,7 +235,7 @@ def _call_get_initial_cache_state(encoder, batch_size: int):
         return fn(batch_size=batch_size)
     return fn(batch_size)
 
-def _call_cache_aware_stream_step(encoder, x, x_len, cache_state):
+def _call_cache_aware_stream_step(encoder, x, x_len, cache_state, keep_all_outputs=None):
     cache_last_channel, cache_last_time, cache_last_channel_len = cache_state
     fn = encoder.cache_aware_stream_step
     sig = inspect.signature(fn)
@@ -219,6 +266,8 @@ def _call_cache_aware_stream_step(encoder, x, x_len, cache_state):
             kwargs[cache_time_name] = cache_last_time
         if cache_len_name:
             kwargs[cache_len_name] = cache_last_channel_len
+        if keep_all_outputs is not None and "keep_all_outputs" in names:
+            kwargs["keep_all_outputs"] = keep_all_outputs
         missing = [
             p.name
             for p in params
@@ -232,6 +281,8 @@ def _call_cache_aware_stream_step(encoder, x, x_len, cache_state):
         return fn(**kwargs)
 
     if len(params) >= 5:
+        if keep_all_outputs is not None and "keep_all_outputs" in names:
+            return fn(x, x_len, cache_last_channel, cache_last_time, cache_last_channel_len, keep_all_outputs=keep_all_outputs)
         return fn(x, x_len, cache_last_channel, cache_last_time, cache_last_channel_len)
     if len(params) == 4:
         return fn(x, x_len, cache_last_channel, cache_last_time)
@@ -303,11 +354,21 @@ class StreamingEncoderWrapper(torch.nn.Module):
         cache_last_time,
         cache_last_channel_len,
     ):
+        if hasattr(self.encoder, "forward_for_export"):
+            out = self.encoder.forward_for_export(
+                audio_signal,
+                length,
+                cache_last_channel=cache_last_channel,
+                cache_last_time=cache_last_time,
+                cache_last_channel_len=cache_last_channel_len,
+            )
+            return _normalize_streaming_outputs(out)
         out = _call_cache_aware_stream_step(
             self.encoder,
             audio_signal,
             length,
             (cache_last_channel, cache_last_time, cache_last_channel_len),
+            keep_all_outputs=False,
         )
         if self.use_post_process:
             out = _call_streaming_post_process(self.encoder, out)
@@ -607,15 +668,25 @@ def export_encoder_streaming(
     else:
         logger.warning("encoder.export_cache_support not found; continuing without it")
 
+    n_mels = model.cfg.preprocessor.get('features', 128)
+    cfg = _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size, cache_drop_size)
+    if cache_drop_size is None and cfg is not None:
+        cache_drop_size = getattr(cfg, "cache_drop_size", None)
+    cache_drop_size = _clamp_cache_drop_size(encoder, cfg, cache_drop_size, n_mels, device)
     cfg = _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size, cache_drop_size)
     if not skip_setup:
         _call_setup_streaming_params(encoder)
         # setup_streaming_params may reset streaming_cfg; reapply overrides if needed.
         cfg = _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size, cache_drop_size)
+        post_drop = _clamp_cache_drop_size(encoder, cfg, cache_drop_size, n_mels, device)
+        if post_drop != cache_drop_size:
+            cache_drop_size = post_drop
+            cfg = _maybe_update_streaming_cfg(encoder, cache_size, chunk_size, shift_size, cache_drop_size)
+            _call_setup_streaming_params(encoder)
     else:
         logger.info("Skipping encoder.setup_streaming_params per CLI flag")
 
-    n_mels = model.cfg.preprocessor.get('features', 128)
+    logger.info("Final encoder.streaming_cfg for streaming export: %s", getattr(encoder, "streaming_cfg", None))
     time_steps = dummy_len or _select_streaming_chunk_len(cfg, fallback=64)
     dummy_input = torch.randn(1, n_mels, time_steps).to(device)
     dummy_len_tensor = torch.LongTensor([time_steps]).to(device)
@@ -626,22 +697,30 @@ def export_encoder_streaming(
     )
     if len(cache_state) < 3:
         raise RuntimeError(f"Expected 3 cache tensors, got {len(cache_state)}")
+    use_batch_first_cache = hasattr(encoder, "forward_for_export")
+    if use_batch_first_cache:
+        cache_state = (
+            cache_state[0].transpose(0, 1).contiguous(),
+            cache_state[1].transpose(0, 1).contiguous(),
+            cache_state[2],
+        )
 
     wrapper = StreamingEncoderWrapper(encoder, use_post_process=use_post_process).to(device)
 
     path = os.path.join(out_dir, "encoder_streaming.onnx")
     dynamic_axes = None
     if dynamic:
+        cache_batch_axis = 0 if use_batch_first_cache else 1
         dynamic_axes = {
             'audio_signal': {0: 'batch', 2: 'time'},
             'length': {0: 'batch'},
-            'cache_last_channel': {1: 'batch'},
-            'cache_last_time': {1: 'batch'},
+            'cache_last_channel': {cache_batch_axis: 'batch'},
+            'cache_last_time': {cache_batch_axis: 'batch'},
             'cache_last_channel_len': {0: 'batch'},
             'encoder_output': {0: 'batch', 2: 'time'},
             'encoded_lengths': {0: 'batch'},
-            'cache_last_channel_out': {1: 'batch'},
-            'cache_last_time_out': {1: 'batch'},
+            'cache_last_channel_out': {cache_batch_axis: 'batch'},
+            'cache_last_time_out': {cache_batch_axis: 'batch'},
             'cache_last_channel_len_out': {0: 'batch'},
         }
 
