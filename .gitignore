@@ -28,6 +28,7 @@ out/
 artifacts/reference/
 artifacts/logs/
 artifacts/trace/
+artifacts/eval/
 
 .cargo-target-magnolia/
 .cursor

@@ -322,7 +322,9 @@ def run_cli_transcription(
     env: Dict[str, str],
     timeout: int = 120,
     verbose: bool = False,
-    stream_sim: float = 0.5
+    stream_sim: float = 0.5,
+    no_sleep: bool = False,
+    feature_norm: Optional[str] = None,
 ) -> Tuple[bool, str, str]:
     """Run CLI transcription and return (success, transcript, debug_output).
 
@@ -333,8 +335,11 @@ def run_cli_transcription(
         str(wav_path),
         "--model-dir", str(model_dir),
         "--stream-sim", str(stream_sim),  # Chunk processing to avoid encoder max
+        "--no-sleep" if no_sleep else "",
         "--verbose" if verbose else ""
     ]
+    if feature_norm:
+        cmd.extend(["--feature-norm", feature_norm])
     cmd = [c for c in cmd if c]  # Remove empty strings
 
     full_env = os.environ.copy()
@@ -418,7 +423,10 @@ def run_variant(
     output_dir: Path,
     loopback: LoopbackConfig,
     use_loopback: bool = False,
-    verbose: bool = False
+    verbose: bool = False,
+    stream_sim: float = 0.5,
+    no_sleep: bool = False,
+    feature_norm: Optional[str] = None,
 ) -> Dict:
     """Run a single variant for one round.
 
@@ -438,6 +446,9 @@ def run_variant(
         "AUDIO_TAP_DIR": str(tap_dir),
         "AUDIO_TAP_FEATURES": "1",
     }
+    lib_dir = Path(__file__).resolve().parents[2] / "cpp" / "build"
+    ld_path = os.environ.get("LD_LIBRARY_PATH", "")
+    env["LD_LIBRARY_PATH"] = f"{lib_dir}:{ld_path}" if ld_path else str(lib_dir)
     env.update(variant.env)
 
     results = {
@@ -465,7 +476,14 @@ def run_variant(
 
         # Run transcription
         success, transcript, debug_out = run_cli_transcription(
-            cli_path, model_dir, wav_path, env, verbose=verbose
+            cli_path,
+            model_dir,
+            wav_path,
+            env,
+            verbose=verbose,
+            stream_sim=stream_sim,
+            no_sleep=no_sleep,
+            feature_norm=feature_norm,
         )
 
         metrics = parse_debug_output(debug_out)
@@ -577,6 +595,12 @@ def main():
                         help="Verbose output")
     parser.add_argument('--test-loopback', action='store_true',
                         help="Only test loopback setup, don't run suite")
+    parser.add_argument('--stream-sim', type=float, default=0.5,
+                        help="Streaming interval in seconds (default: 0.5)")
+    parser.add_argument('--no-sleep', action='store_true',
+                        help="Disable sleeping between streaming chunks")
+    parser.add_argument('--feature-norm', choices=['none', 'per_feature'], default=None,
+                        help="Feature normalization mode passed to CLI")
 
     args = parser.parse_args()
 
@@ -728,7 +752,10 @@ def main():
                 output_dir=output_dir,
                 loopback=loopback,
                 use_loopback=args.use_loopback,
-                verbose=args.verbose
+                verbose=args.verbose,
+                stream_sim=args.stream_sim,
+                no_sleep=args.no_sleep,
+                feature_norm=args.feature_norm,
             )
             all_results.append(results)
 

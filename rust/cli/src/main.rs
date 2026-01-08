@@ -1,7 +1,7 @@
 use clap::Parser;
 use features::{FeatureConfig, LogMelExtractor, compute_per_feature_stats, apply_per_feature_norm, NormalizationMode};
 use parakeet_trt::{ParakeetSessionSafe, TranscriptionEvent};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -20,6 +20,9 @@ struct Args {
 
     #[arg(long, help = "Simulated streaming interval in seconds")]
     stream_sim: Option<f32>,
+
+    #[arg(long, help = "Disable sleeping between stream chunks (no-sleep replay)")]
+    no_sleep: bool,
 
     #[arg(long, default_value_t = 0)]
     device_id: i32,
@@ -42,6 +45,9 @@ struct Args {
 
     #[arg(long, help = "Dump computed features to this file (f32le, [C,T])")]
     dump_features: Option<PathBuf>,
+
+    #[arg(long, help = "Dump per-chunk frame counts to this JSON file (streaming only)")]
+    dump_chunk_frames: Option<PathBuf>,
 
     #[arg(long, value_parser = ["none", "per_feature"], help = "Feature normalization (overrides PARAKEET_FEATURE_NORM)")]
     feature_norm: Option<String>,
@@ -419,6 +425,7 @@ fn main() -> anyhow::Result<()> {
         let mut pos = 0;
         let mut chunk_idx = 0;
         let mut all_features_bct = Vec::new();
+        let mut chunk_frames_list: Vec<usize> = Vec::new();
 
         while pos < audio.len() {
             let end = (pos + samples_per_chunk).min(audio.len());
@@ -428,6 +435,7 @@ fn main() -> anyhow::Result<()> {
             let num_frames = features_tc.len() / n_mels;
 
             if num_frames > 0 {
+                chunk_frames_list.push(num_frames);
                 if feature_norm == NormalizationMode::PerFeature {
                     if let Some(stats) = per_feature_stats.as_ref() {
                         apply_per_feature_norm(&mut features_tc, n_mels, num_frames, stats);
@@ -470,7 +478,9 @@ fn main() -> anyhow::Result<()> {
 
             pos = end;
             chunk_idx += 1;
-            thread::sleep(Duration::from_secs_f32(interval));
+            if !args.no_sleep {
+                thread::sleep(Duration::from_secs_f32(interval));
+            }
         }
 
         // Dump features if requested
@@ -479,6 +489,21 @@ fn main() -> anyhow::Result<()> {
             dump_features_to_file(&all_features_bct, dump_path)?;
             if args.verbose {
                 eprintln!("[replay] Dumped {} frames to {:?}", total_frames, dump_path);
+            }
+        }
+
+        if let Some(ref dump_path) = args.dump_chunk_frames {
+            let total_frames = chunk_frames_list.iter().sum::<usize>();
+            let payload = json!({
+                "chunk_frames": chunk_frames_list,
+                "total_frames": total_frames,
+                "mel_bins": n_mels,
+                "layout": "bins_major",
+            });
+            let file = File::create(dump_path)?;
+            serde_json::to_writer_pretty(file, &payload)?;
+            if args.verbose {
+                eprintln!("[replay] Dumped chunk frames to {:?}", dump_path);
             }
         }
     } else {

@@ -318,6 +318,35 @@ cp .cursor/debug.log artifacts/trace/tdt_1utt_trt_fp32_noTF32_untrimmed.jsonl
 - The debug run uses `PARAKEET_DEBUG_TDT_STEPS=80`, so stdout may show only partials while the per-step NDJSON trace is captured in `artifacts/trace/tdt_1utt_trt_fp32_noTF32_untrimmed.jsonl`.
 - The encoder engine used is the noTF32 build via `models/parakeet-tdt-0.6b-v3/engines_20260107_fp32/encoder.engine` symlink.
 
+## Runtime Trace (1 utterance, ORT streaming baseline)
+```bash
+LD_LIBRARY_PATH=/home/emmy/git/trt-asr-engine/cpp/build \
+rust/target/debug/cli \
+  --model-dir models/parakeet-tdt-0.6b-v3/engines_20260107_fp32 \
+  --stream-sim 0.5 \
+  --no-sleep \
+  --dump-features /tmp/tdt_features_1utt.f32 \
+  --dump-chunk-frames /tmp/tdt_chunks_1utt.json \
+  eval/wav/librispeech_dev_gate/dev-clean/1272-128104-0000.wav
+
+python tools/verify_nemo/tdt_trace.py \
+  --model models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
+  --model-dir models/parakeet-tdt-0.6b-v3 \
+  --features-f32 /tmp/tdt_features_1utt.f32 \
+  --chunk-frames 48 \
+  --chunk-frames-list /tmp/tdt_chunks_1utt.json \
+  --encoder-backend ort \
+  --encoder-onnx tools/export_onnx/out/encoder_streaming.onnx \
+  --contract contracts/parakeet-tdt-0.6b-v3.contract.json \
+  --device cpu \
+  --out artifacts/trace/tdt_1utt_ort_streaming_untrimmed.jsonl
+```
+
+### Notes
+- ORT baseline trace uses the same chunk boundaries as runtime (`/tmp/tdt_chunks_1utt.json`) and matches the cache3 streaming schedule.
+- Artifact: `artifacts/trace/tdt_1utt_ort_streaming_untrimmed.jsonl`.
+- Chunk boundary list: `artifacts/trace/tdt_1utt_chunks.json`.
+
 ## Runtime Sanity (10 utterances, untrimmed manifest)
 ```bash
 LD_LIBRARY_PATH=/home/emmy/git/trt-asr-engine/cpp/build \
@@ -337,6 +366,32 @@ python tools/stt_suite/run_suite.py \
 ### Results
 - PASS `10/10` (0 empty, 0 fail, 0 NaNs).
 - Output summary: `artifacts/logs/tdt_10utt_fp32_noTF32_untrimmed/all_results.json`.
+
+## Streaming WER Gate (100 utterances, no-sleep replay)
+```bash
+python tools/stt_suite/run_suite.py \
+  --manifest eval/manifests/librispeech_dev_gate.tsv \
+  --cli-path rust/target/debug/cli \
+  --model-dir models/parakeet-tdt-0.6b-v3 \
+  --num-utterances 100 \
+  --variants nopunct \
+  --stream-sim 0.5 \
+  --no-sleep \
+  --feature-norm per_feature \
+  --output-dir artifacts/eval/tdt_100utt_fp32_noTF32_streaming_nosleep_perfeat
+
+python tools/stt_suite/score_wer.py \
+  artifacts/eval/tdt_100utt_fp32_noTF32_streaming_nosleep_perfeat \
+  --manifest eval/manifests/librispeech_dev_gate.tsv
+```
+
+### Results
+- Streaming replay: `94 ok`, `6 empty`, `0 fail`, `0 NaNs` (runtime parse).
+- WER: `99.23%` with `90` empty hypotheses after normalization (punctuation-only outputs dominate).
+- Artifacts:
+  - `artifacts/eval/tdt_100utt_fp32_noTF32_streaming_nosleep_perfeat/all_results.json`
+  - `artifacts/eval/tdt_100utt_fp32_noTF32_streaming_nosleep_perfeat/scores.tsv`
+  - `artifacts/eval/tdt_100utt_fp32_noTF32_streaming_nosleep_perfeat/nopunct/round_0/transcripts.tsv`
 
 ## Legacy: Trimmed stopgap (superseded)
 - `artifacts/trace/librispeech_dev_gate_trimmed10.tsv`
