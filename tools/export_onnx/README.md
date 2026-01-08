@@ -109,6 +109,7 @@ python -u export.py \
 - The export writes `model_meta.json`, `vocab.txt` (if available), and best-effort `tokenizer.model`.
 - **Joint output is raw logits** (no log-softmax). Runtime should split token vs duration heads and apply per-head softmax only when probabilities are required.
 - Streaming export clamps `cache_drop_size` if it would yield negative cache lengths on chunk 0 (after `drop_extra_pre_encoded`).
+- Stateful caching for 48‑frame chunks requires `cache_drop_size < pre_encode_len`; current export uses `--streaming-chunk-size 48 --streaming-cache-drop-size 3` to yield positive `cache_last_channel_len_out`.
 
 ## Validation
 After each export, `export.py` runs:

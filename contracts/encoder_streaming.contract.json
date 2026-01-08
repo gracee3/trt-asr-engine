@@ -5,10 +5,10 @@
     "layers": 24,
     "cache_size": 256,
     "time_ctx": 4,
-    "valid_out_len_expected": 1,
-    "cache_drop_size": 72,
-    "shift_size": [1, 8],
-    "chunk_size": [577, 584],
+    "valid_out_len_expected": 3,
+    "cache_drop_size": 3,
+    "shift_size": [17, 24],
+    "chunk_size": [41, 48],
     "pre_encode_cache_size": [0, 9],
     "drop_extra_pre_encoded": 2
   },
@@ -20,8 +20,8 @@
       "description": "Mel-filterbank features",
       "constraints": {
         "T": {
-          "typical_values": [592, 584],
-          "description": "Feature frames per chunk (typically 592 for first chunk, 584 for subsequent)"
+          "typical_values": [41, 48],
+          "description": "Feature frames per chunk (typically 41 for first chunk, 48 for subsequent)"
         },
         "B": {
           "typical_values": [1],
@@ -38,8 +38,8 @@
     {
       "name": "cache_last_channel",
       "dtype": "float32",
-      "shape": [24, "B", 256, 1024],
-      "description": "Last-channel cache for 24 Conformer layers (fixed max size)",
+      "shape": ["B", 24, 256, 1024],
+      "description": "Last-channel cache for 24 Conformer layers (batch-first, fixed max size)",
       "constraints": {
         "layer": 24,
         "cache_dim": 256,
@@ -49,8 +49,8 @@
     {
       "name": "cache_last_time",
       "dtype": "float32",
-      "shape": [24, "B", 1024, 4],
-      "description": "Last-time cache for 24 Conformer layers (fixed max context)",
+      "shape": ["B", 24, 1024, 4],
+      "description": "Last-time cache for 24 Conformer layers (batch-first, fixed max context)",
       "constraints": {
         "layer": 24,
         "hidden_dim": 1024,
@@ -72,8 +72,8 @@
       "description": "Encoded features for current chunk",
       "constraints": {
         "T_out": {
-          "expected": 1,
-          "description": "Expected to be 1 when valid_out_len=1 (streaming mode)"
+          "expected": 3,
+          "description": "Expected to be 3 when valid_out_len=3 (streaming mode)"
         }
       }
     },
@@ -81,13 +81,13 @@
       "name": "encoded_lengths",
       "dtype": "int64",
       "shape": ["B"],
-      "description": "Number of valid encoded frames in encoder_output (expected to be 1)"
+      "description": "Number of valid encoded frames in encoder_output (expected to be 3)"
     },
     {
       "name": "cache_last_channel_out",
       "dtype": "float32",
-      "shape": [24, "B", "C_out", 1024],
-      "description": "Updated last-channel cache (dynamic C_out <= 256)",
+      "shape": ["B", 24, "C_out", 1024],
+      "description": "Updated last-channel cache (batch-first, dynamic C_out <= 256)",
       "constraints": {
         "C_out": {
           "max": 256,
@@ -98,8 +98,8 @@
     {
       "name": "cache_last_time_out",
       "dtype": "float32",
-      "shape": [24, "B", 1024, "K_out"],
-      "description": "Updated last-time cache (dynamic K_out <= 4)",
+      "shape": ["B", 24, 1024, "K_out"],
+      "description": "Updated last-time cache (batch-first, dynamic K_out <= 4)",
       "constraints": {
         "K_out": {
           "max": 4,
@@ -116,18 +116,18 @@
   ],
   "trt_optimization_profiles": [
     {
-      "name": "streaming_profile_592",
-      "description": "Optimized for first chunk (T=592)",
+      "name": "streaming_profile_41",
+      "description": "Optimized for first chunk (T=41)",
       "dimensions": {
-        "audio_signal.T": {"min": 592, "opt": 592, "max": 592},
+        "audio_signal.T": {"min": 41, "opt": 41, "max": 41},
         "B": {"min": 1, "opt": 1, "max": 1}
       }
     },
     {
-      "name": "streaming_profile_584",
-      "description": "Optimized for subsequent chunks (T=584)",
+      "name": "streaming_profile_48",
+      "description": "Optimized for subsequent chunks (T=48)",
       "dimensions": {
-        "audio_signal.T": {"min": 584, "opt": 584, "max": 584},
+        "audio_signal.T": {"min": 48, "opt": 48, "max": 48},
         "B": {"min": 1, "opt": 1, "max": 1}
       }
     },
@@ -135,7 +135,7 @@
       "name": "unified_profile",
       "description": "Unified profile supporting both chunk sizes",
       "dimensions": {
-        "audio_signal.T": {"min": 584, "opt": 592, "max": 592},
+        "audio_signal.T": {"min": 41, "opt": 48, "max": 48},
         "B": {"min": 1, "opt": 1, "max": 8}
       }
     }
@@ -157,14 +157,14 @@
       }
     },
     "initialization": {
-      "cache_last_channel": "zeros [24, B, 256, 1024]",
-      "cache_last_time": "zeros [24, B, 1024, 4]",
+      "cache_last_channel": "zeros [B, 24, 256, 1024]",
+      "cache_last_time": "zeros [B, 24, 1024, 4]",
       "cache_last_channel_len": "zeros [B]"
     },
     "assertions": {
-      "encoder_output_time_dim": "Should equal 1 when valid_out_len=1",
-      "encoded_lengths": "Should equal 1 for streaming chunks",
-      "cache_last_channel_len_out": "Should be >= 0 and typically 0 after streaming_post_process"
+      "encoder_output_time_dim": "Should equal 3 when valid_out_len=3",
+      "encoded_lengths": "Should equal 3 for streaming chunks",
+      "cache_last_channel_len_out": "Should be >= 0 and non-decreasing until cache_size"
     }
   },
   "validation": {

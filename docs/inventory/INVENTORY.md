@@ -35,6 +35,8 @@ This is a repo scan snapshot for trt-asr-engine. Tree view captured in `docs/inv
   - `tools/onnxruntime/diagnose_cache_time_mismatch.py` (cache mismatch diagnostics).
   - `tools/onnxruntime/compare_joint_step0.py` (joint step‑0 swap test using ORT).
   - `tools/onnxruntime/compare_encoder_step0.py` (encoder step‑0 ORT vs TRT parity).
+  - `tools/onnxruntime/ort_cache_sensitivity.py` (ORT cache sensitivity A/B test).
+  - `tools/onnxruntime/inspect_streaming_cache_graph.py` (trace cache output provenance in ONNX).
   - `tools/verify_nemo/tdt_trace.py` (PyTorch TDT decode trace).
   - `tools/verify_nemo/compare_tdt_trace.py` (trace comparator vs C++).
 - ONNX inspection:

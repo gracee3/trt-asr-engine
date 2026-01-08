@@ -76,7 +76,9 @@ python tools/verify_nemo/streaming_encoder_reference.py \
   --model models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
   --device cuda \
   --cache-size 256 \
-  --chunk-len 592 \
+  --chunk-len 48 \
+  --chunk-size 48 \
+  --cache-drop-size 3 \
   --num-chunks 50 \
   --seed 42 \
   --jsonl-out artifacts/reference/pytorch_reference_50.jsonl

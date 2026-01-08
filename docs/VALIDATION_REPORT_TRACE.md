@@ -1,6 +1,6 @@
 # TDT Trace Parity Report
 
-Status: FAIL (first divergence at step 0 after engine rebuilds).
+Status: PARTIAL (ORT streaming cache parity PASS after cache_drop_size=3 re-export; TRT/trace parity pending).
 
 ## Environment
 - Model: `models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo`
@@ -136,32 +136,46 @@ python tools/onnxruntime/compare_encoder_step0.py \
 - Remaining mismatch with PyTorch trace is **not** a TRT encoder bug; the PyTorch trace is still using offline encoder semantics.
 - `cache_last_channel_len_out=-67` is coming from the ONNX export (ORT matches TRT), so cache‑len semantics must be corrected at the export/model level. Runtime now applies a fallback (`cache_len_in + T_enc`) to unblock multi‑chunk runs.
 
-## ORT Streaming Parity (4 chunks, closed‑loop)
-### Reference generation (PyTorch streaming + fallback cache_len)
+Note: This step‑0 parity reflects the pre‑`cache_drop_size=3` export. Rebuild TRT streaming encoder from the new ONNX and re‑run step‑0 parity to update these values.
+
+## ORT Streaming Parity (4 chunks, closed-loop)
+### Reference generation (PyTorch streaming + cache_drop_size=3 override)
 ```bash
 python tools/verify_nemo/streaming_encoder_reference.py \
   --model models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
   --device cpu \
   --chunk-len 48 \
   --num-chunks 4 \
-  --jsonl-out /tmp/stream_ref.jsonl
+  --cache-drop-size 3 \
+  --chunk-size 48 \
+  --jsonl-out /tmp/stream_ref_cache3.jsonl
 ```
 
-### ORT closed‑loop parity
+### ORT closed-loop parity (cache_drop_size=3 export)
 ```bash
 python tools/onnxruntime/onnx_streaming_parity.py \
   --onnx tools/export_onnx/out/encoder_streaming.onnx \
-  --ref /tmp/stream_ref.jsonl \
+  --ref /tmp/stream_ref_cache3.jsonl \
   --mode closed_loop \
   --providers cpu \
   --max-chunks 4 \
-  --summary-json /tmp/ort_streaming_parity.json
+  --summary-json /tmp/ort_streaming_parity_cache3.json
+```
+
+### ORT cache sensitivity (sanity)
+```bash
+python tools/onnxruntime/ort_cache_sensitivity.py \
+  --snapshot-dir /tmp/tdt_snapshot_trt_stream10 \
+  --providers cpu
 ```
 
 ### Results
-- Chunk 0: encoder_output matches; cache_len_out mismatch (`ORT=-67`, ref fallback `2`)
-- Chunks 1–3: encoder_output drifts (cache_len_out stays negative on ORT: `-134, -201, -268`)
-- Cache outputs remain zero for all chunks (`cache_last_channel_out` and `cache_last_time_out` max_abs=0)
+- cache_len_out: `1,2,3,4` (ORT matches reference; monotonic)
+- encoded_lengths: `3` for all chunks (ORT matches)
+- encoder_output parity: max_abs ≤ `2.8e-07` over 4 chunks
+- cache_last_time_out: non-zero; cache_last_channel_out remains zero at these chunks
+- ORT cache sensitivity: `cache_len_out A=1 B=65`, cache outputs non-zero and sensitive to cache inputs
 
 ### Interpretation
-- Closed‑loop parity fails because the exported streaming encoder outputs **negative cache_len** and **zero cache tensors**, so state does not propagate even in ORT. Fixing cache_len_out semantics (or emitting usable cache tensors) is required before closed‑loop parity can pass.
+- Closed‑loop parity now **PASS** with stateful cache_len_out after re‑exporting streaming encoder with `cache_drop_size=3`.
+- Next: rebuild TRT streaming encoder from the new ONNX and re-run TRT vs ORT closed-loop parity.

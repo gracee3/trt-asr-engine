@@ -4,7 +4,7 @@ TensorRT parity testing against PyTorch reference JSONL.
 Supports both functional (per-chunk stateless) and closed-loop (recurrent) modes.
 
 Based on the ORT parity harness structure with TRT-specific runtime.
-Enforces the cache_len=0 streaming contract at runtime.
+Enforces streaming contract invariants (valid_out_len, cache_len bounds) at runtime.
 """
 import argparse
 import base64
@@ -93,8 +93,8 @@ def pad_or_trunc_along_axis(x: np.ndarray, axis: int, target: int, pad_side: str
 
 @dataclass
 class StreamingState:
-    cache_last_channel: np.ndarray          # [24, B, C, 1024]
-    cache_last_time: np.ndarray             # [24, B, 1024, K]
+    cache_last_channel: np.ndarray          # [B, 24, C, 1024]
+    cache_last_time: np.ndarray             # [B, 24, 1024, K]
     cache_last_channel_len: np.ndarray      # [B]
 
 
@@ -187,11 +187,19 @@ def cuda_memcpy_dtoh(dst: np.ndarray, src):
 class TRTStreamingEncoder:
     """TensorRT streaming encoder wrapper with contract enforcement."""
 
-    def __init__(self, engine_path: str, batch_size: int = 1, cache_size: int = 256, time_ctx: int = 4):
+    def __init__(
+        self,
+        engine_path: str,
+        batch_size: int = 1,
+        cache_size: int = 256,
+        time_ctx: int = 4,
+        valid_out_len_expected: Optional[int] = None,
+    ):
         self.logger = trt.Logger(trt.Logger.WARNING)
         self.batch_size = batch_size
         self.cache_size = cache_size
         self.time_ctx = time_ctx
+        self.valid_out_len_expected = valid_out_len_expected
 
         # Load engine
         print(f"Loading TRT engine from: {engine_path}")
@@ -279,8 +287,8 @@ class TRTStreamingEncoder:
         self,
         audio_signal: np.ndarray,      # [B, 128, T]
         length: np.ndarray,            # [B]
-        cache_last_channel: np.ndarray,  # [24, B, 256, 1024]
-        cache_last_time: np.ndarray,     # [24, B, 1024, 4]
+        cache_last_channel: np.ndarray,  # [B, 24, 256, 1024]
+        cache_last_time: np.ndarray,     # [B, 24, 1024, 4]
         cache_last_channel_len: np.ndarray,  # [B]
     ) -> Dict[str, np.ndarray]:
         """Run inference with contract enforcement."""
@@ -332,36 +340,48 @@ class TRTStreamingEncoder:
         outputs = {name: self.h_outputs[name].copy() for name in self.output_names}
 
         # MANDATORY CONTRACT ASSERTIONS
-        self._validate_streaming_contract(outputs)
+        self._validate_streaming_contract(outputs, cache_last_channel_len)
 
         return outputs
 
-    def _validate_streaming_contract(self, outputs: Dict[str, np.ndarray]):
-        """Hard fail on contract violations (per TRT_INTEGRATION_CLEARANCE.md)."""
+    def _validate_streaming_contract(
+        self,
+        outputs: Dict[str, np.ndarray],
+        cache_len_in: Optional[np.ndarray],
+    ):
+        """Hard fail on contract violations (per current contract)."""
 
-        # Assertion 1: Encoded lengths must be 1 (valid_out_len=1)
+        expected_len = self.valid_out_len_expected
+        cache_len_in_val = None
+        if cache_len_in is not None and cache_len_in.size:
+            cache_len_in_val = int(np.min(cache_len_in))
+
+        # Assertion 1: Encoded lengths must match expected valid_out_len (if provided)
         encoded_lengths = outputs.get("encoded_lengths")
         if encoded_lengths is not None:
-            if not np.all(encoded_lengths == 1):
+            if expected_len is not None and not np.all(encoded_lengths == expected_len):
                 raise RuntimeError(
-                    f"STREAMING CONTRACT VIOLATION: encoded_lengths != 1, got {encoded_lengths}"
+                    f"STREAMING CONTRACT VIOLATION: encoded_lengths != {expected_len}, got {encoded_lengths}"
                 )
 
-        # Assertion 2: Encoder output time dimension must be 1
+        # Assertion 2: Encoder output time dimension must match expected valid_out_len (if provided)
         encoder_output = outputs.get("encoder_output")
         if encoder_output is not None:
-            if encoder_output.shape[-1] != 1:
+            if expected_len is not None and encoder_output.shape[-1] != expected_len:
                 raise RuntimeError(
-                    f"STREAMING CONTRACT VIOLATION: encoder_output time != 1, shape={encoder_output.shape}"
+                    f"STREAMING CONTRACT VIOLATION: encoder_output time != {expected_len}, shape={encoder_output.shape}"
                 )
 
-        # Assertion 3: Cache length must be 0 (chunk-isolated mode)
+        # Assertion 3: Cache length must be within bounds (stateful mode)
         cache_len_out = outputs.get("cache_last_channel_len_out")
         if cache_len_out is not None:
-            if not np.all(cache_len_out == 0):
+            if np.any(cache_len_out < 0) or np.any(cache_len_out > self.cache_size):
                 raise RuntimeError(
-                    f"STREAMING CONTRACT VIOLATION: cache_len != 0, got {cache_len_out}. "
-                    "This indicates streaming config changed. STOP and re-validate."
+                    f"STREAMING CONTRACT VIOLATION: cache_len out of bounds (0..{self.cache_size}), got {cache_len_out}"
+                )
+            if cache_len_in_val is not None and np.any(cache_len_out < cache_len_in_val):
+                raise RuntimeError(
+                    f"STREAMING CONTRACT VIOLATION: cache_len_out < cache_len_in ({cache_len_in_val}), got {cache_len_out}"
                 )
 
     def cleanup(self):
@@ -391,12 +411,18 @@ def main():
     ap.add_argument("--time-ctx", type=int, default=4)
     ap.add_argument("--cache-pad-side", choices=["right", "left"], default="right")
     ap.add_argument("--summary-json", default="", help="Write summary JSON to this path")
+    ap.add_argument("--valid-out-len", type=int, default=3, help="Expected encoded_lengths/time dim (default: 3)")
     ap.add_argument("--zero-feed-cache", action="store_true", default=False,
-                    help="Always feed zero caches (contract: cache_len=0). Default: use reference caches for parity.")
+                    help="Always feed zero caches (diagnostic). Default: use reference caches for parity.")
     args = ap.parse_args()
 
     print(f"Creating TRT session from: {args.engine}")
-    trt_encoder = TRTStreamingEncoder(args.engine, cache_size=args.cache_size, time_ctx=args.time_ctx)
+    trt_encoder = TRTStreamingEncoder(
+        args.engine,
+        cache_size=args.cache_size,
+        time_ctx=args.time_ctx,
+        valid_out_len_expected=args.valid_out_len if args.valid_out_len > 0 else None,
+    )
 
     if args.dump_dir:
         os.makedirs(args.dump_dir, exist_ok=True)
@@ -430,11 +456,11 @@ def main():
                 running_state = StreamingState(ref_cache_ch, ref_cache_tm, ref_cache_len)
             st_in = running_state
 
-        # Per contract: zero-feed caches since cache_len=0
+        # Optional diagnostic: zero-feed caches regardless of reference
         if args.zero_feed_cache:
             st_in = StreamingState(
-                cache_last_channel=np.zeros((24, B, args.cache_size, 1024), dtype=np.float32),
-                cache_last_time=np.zeros((24, B, 1024, args.time_ctx), dtype=np.float32),
+                cache_last_channel=np.zeros((B, 24, args.cache_size, 1024), dtype=np.float32),
+                cache_last_time=np.zeros((B, 24, 1024, args.time_ctx), dtype=np.float32),
                 cache_last_channel_len=np.zeros((B,), dtype=np.int64),
             )
         else:
@@ -484,7 +510,7 @@ def main():
         # Cache channel check (should be tight)
         checks.append(assert_close("cache_last_channel_out", got_cache_ch, ref["cache_last_channel_out"], args.atol, args.rtol))
 
-        # Cache time check (relaxed per contract - known 0.01-0.1 error, non-blocking when cache_len=0)
+        # Cache time check (relaxed per contract; cache_last_time is numerically noisy)
         cache_tm_ok, cache_tm_stats, cache_tm_msg = assert_close(
             "cache_last_time_out", got_cache_tm, ref["cache_last_time_out"], args.cache_atol, 10.0
         )

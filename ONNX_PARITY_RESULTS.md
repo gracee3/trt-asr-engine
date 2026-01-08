@@ -1,5 +1,9 @@
 # ONNX Runtime Parity Test Results
 
+> LEGACY (pre-reset): This report reflects the 2026-01-03 streaming config (chunk_size 584/592, valid_out_len 1/2).
+> Current restart uses cache_drop_size=3, chunk_size 48, valid_out_len=3. See `contracts/parakeet-tdt-0.6b-v3.contract.json`
+> and `docs/VALIDATION_REPORT_TRACE.md` for current baselines.
+
 ## Summary
 
 Completed comprehensive ORT parity testing against PyTorch reference for the streaming encoder model (`encoder_streaming.onnx`). Tests were conducted in both **functional** (stateless per-chunk) and **closed-loop** (recurrent cache feedback) modes on both CPU and CUDA execution providers.

@@ -1,5 +1,9 @@
 # TensorRT Integration Checklist
 
+> LEGACY (pre-reset): This document reflects the 2026-01-03 streaming config (chunk_size 584, valid_out_len 1).
+> Current restart uses cache_drop_size=3, chunk_size 48, valid_out_len=3. See `contracts/parakeet-tdt-0.6b-v3.contract.json`
+> and `docs/VALIDATION_REPORT_TRACE.md` for current baselines.
+
 **Model:** parakeet-tdt-0.6b-v3 streaming encoder
 **ONNX:** `encoder_streaming.onnx`
 **Status:** ✅ **INTEGRATION COMPLETE** (2026-01-03)

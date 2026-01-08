@@ -36,10 +36,10 @@
   Evidence: streaming paper requires cache/context discipline for equivalence; NeMo `ConformerEncoder` implements cache carryover when `cache_last_channel_len` is nonzero.
   Validation: re-export streaming encoder, generate reference JSONL with nonzero cache_len, and pass closed-loop parity with cache feedback (ORT).
 
-- Decision: Clamp `cache_drop_size` to avoid negative cache lengths on chunk 0.
+- Decision: Initial clamp `cache_drop_size` to 71 for model-default streaming config.
   Alternatives: accept negative cache_len or disable `drop_extra_pre_encoded`.
   Evidence: pre-encode length for chunk0 (577/584 frames) is 73; after `drop_extra_pre_encoded=2`, max usable length is 71; `cache_drop_size=72` yields negative cache_len.
-  Validation: clamp to 71 → `cache_last_channel_len_out` starts at 0 and increases (0,2,4,6) in closed-loop parity.
+  Validation: For default chunking, clamp prevents negative lengths, but with 48‑frame runtime chunks cache_len remained negative/zero; superseded by 2026-01-08 override to enable stateful caching at low latency.
 
 - Decision: Record feature normalization semantics as per-utterance mean/std over time (`normalize=per_feature`), and flag as not streaming-safe.
   Alternatives: override with streaming-safe normalization (e.g., none or fixed stats).
@@ -61,3 +61,9 @@
   Alternatives: RNNT-style blank-only advance or renormalized duration head for blank.
   Evidence: TDT Algorithm 2 advances time by duration each step; paper disallows blank+duration=0 without renormalization.
   Validation: enable `PARAKEET_DEBUG_TDT_STEPS` and confirm time_idx progression + non-empty token emissions on pinned dev-clean utterances.
+
+## 2026-01-08
+- Decision: Override streaming config for stateful caching at 48‑frame chunks (`chunk_size=[41,48]`, `shift_size=[17,24]`, `cache_drop_size=3`, `valid_out_len=3`).
+  Alternatives: keep model-default streaming config (`cache_drop_size=71`, `valid_out_len=2`) which yields `cache_len_out<=0` for 48‑frame chunks.
+  Evidence: `tools/verify_nemo/streaming_encoder_cache.py --chunk-size 48 --cache-drop-size 3` yields `cache_len_out=1` on chunk 0; ORT cache sensitivity shows positive cache_len_out; ORT closed-loop parity passes for 4 chunks with cache_len_out monotonic.
+  Validation: re-export `encoder_streaming.onnx` with overrides, run `tools/onnxruntime/onnx_streaming_parity.py` closed-loop parity (PASS), and confirm non-negative cache_len_out across chunks.

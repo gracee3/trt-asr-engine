@@ -253,19 +253,19 @@
   },
   "streaming": {
     "mode": "stateful_cache",
-    "valid_out_len": 2,
+    "valid_out_len": 3,
     "cache_len_expected": "dynamic",
     "cache_len_bounds": {"min": 0, "max": 256},
     "cache_len_behavior": "non-decreasing until saturated when cache_drop_size < max_audio_length",
     "cache_layout": "batch_first",
     "cache_valid_region": "cache_last_channel_len_out defines valid prefix length along cache_last_channel_out axis=2",
     "cache_pad": {"side": "right", "value": 0},
-    "chunk_size": [577, 584],
+    "chunk_size": [41, 48],
     "chunk_size_units": "feature_frames",
-    "shift_size": [9, 16],
+    "shift_size": [17, 24],
     "shift_size_units": "feature_frames",
     "valid_out_len_units": "encoder_steps",
-    "cache_drop_size": 71,
+    "cache_drop_size": 3,
     "pre_encode_cache_size": [0, 9],
     "drop_extra_pre_encoded": 2,
     "cache": {
@@ -297,18 +297,18 @@
       },
       "encoder_streaming": [
         {
-          "name": "streaming_profile_592",
-          "audio_signal_T": {"min": 592, "opt": 592, "max": 592},
+          "name": "streaming_profile_41",
+          "audio_signal_T": {"min": 41, "opt": 41, "max": 41},
           "batch": {"min": 1, "opt": 1, "max": 1}
         },
         {
-          "name": "streaming_profile_584",
-          "audio_signal_T": {"min": 584, "opt": 584, "max": 584},
+          "name": "streaming_profile_48",
+          "audio_signal_T": {"min": 48, "opt": 48, "max": 48},
           "batch": {"min": 1, "opt": 1, "max": 1}
         },
         {
           "name": "unified_profile",
-          "audio_signal_T": {"min": 584, "opt": 592, "max": 592},
+          "audio_signal_T": {"min": 41, "opt": 48, "max": 48},
           "batch": {"min": 1, "opt": 1, "max": 8}
         }
       ]
