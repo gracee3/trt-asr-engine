@@ -393,6 +393,48 @@ python tools/stt_suite/score_wer.py \
   - `artifacts/eval/tdt_100utt_fp32_noTF32_streaming_nosleep_perfeat/scores.tsv`
   - `artifacts/eval/tdt_100utt_fp32_noTF32_streaming_nosleep_perfeat/nopunct/round_0/transcripts.tsv`
 
+### Feature norm ablation (streaming, no-sleep)
+```bash
+python tools/stt_suite/run_suite.py \
+  --manifest eval/manifests/librispeech_dev_gate.tsv \
+  --cli-path rust/target/debug/cli \
+  --model-dir models/parakeet-tdt-0.6b-v3 \
+  --num-utterances 100 \
+  --variants base \
+  --stream-sim 0.5 \
+  --no-sleep \
+  --feature-norm none \
+  --output-dir artifacts/eval/tdt_100utt_fp32_noTF32_streaming_nosleep_none
+
+python tools/stt_suite/score_wer.py \
+  artifacts/eval/tdt_100utt_fp32_noTF32_streaming_nosleep_none \
+  --manifest eval/manifests/librispeech_dev_gate.tsv
+```
+
+### Results
+- Streaming replay: `0 ok`, `100 empty`, `0 fail`, `0 NaNs` (runtime parse).
+- WER: `100%` with `100` empty hypotheses after normalization.
+- Artifacts:
+  - `artifacts/eval/tdt_100utt_fp32_noTF32_streaming_nosleep_none/all_results.json`
+  - `artifacts/eval/tdt_100utt_fp32_noTF32_streaming_nosleep_none/scores.tsv`
+  - `artifacts/eval/tdt_100utt_fp32_noTF32_streaming_nosleep_none/base/round_0/transcripts.tsv`
+
+## Feature parity spot-check (runtime vs NeMo)
+```bash
+python tools/verify_nemo/compare_features.py \
+  --model models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
+  --wav eval/wav/librispeech_dev_gate/dev-clean/1272-128104-0000.wav \
+  --runtime-features /tmp/tdt_features_0000_perfeat.f32 \
+  --chunk-frames-list /tmp/tdt_chunks_0000_perfeat.json \
+  --runtime-layout bins_major \
+  --normalize per_feature \
+  --device cpu
+```
+
+### Results
+- Large feature deltas vs NeMo preprocessor: overall `max_abs ≈ 4.8`, `mean_abs ≈ 1.15`, `p99_abs ≈ 3.19`.
+- Similar magnitudes observed on `dev-clean/1272-128104-0002.wav` (see command output in logs).
+
 ## Legacy: Trimmed stopgap (superseded)
 - `artifacts/trace/librispeech_dev_gate_trimmed10.tsv`
 - `artifacts/trace/trimmed_wav/*`
