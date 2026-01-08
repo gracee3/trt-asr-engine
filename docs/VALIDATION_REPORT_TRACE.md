@@ -90,3 +90,45 @@ between TRT encoder/joint outputs vs PyTorch (argmax flip on a close duration pa
   - `enc_trt + pred_pt` → best_dur_idx=0
   - `enc_pt + pred_trt` → best_dur_idx=1
 - Interpretation: **encoder output drift is the root cause** (predictor matches; joint behaves consistently under ORT when fed the same inputs).
+
+## Streaming Encoder Parity (ORT vs TRT, step‑0)
+### Build streaming encoder engine (FP32)
+```bash
+/usr/src/tensorrt/bin/trtexec \
+  --onnx=/home/emmy/git/trt-asr-engine/tools/export_onnx/out/encoder_streaming.onnx \
+  --saveEngine=/home/emmy/git/trt-asr-engine/models/parakeet-tdt-0.6b-v3/engines_20260107_fp32/encoder_streaming.engine \
+  --minShapes=audio_signal:1x128x16,length:1,cache_last_channel:1x24x256x1024,cache_last_time:1x24x1024x4,cache_last_channel_len:1 \
+  --optShapes=audio_signal:1x128x64,length:1,cache_last_channel:1x24x256x1024,cache_last_time:1x24x1024x4,cache_last_channel_len:1 \
+  --maxShapes=audio_signal:1x128x256,length:1,cache_last_channel:1x24x256x1024,cache_last_time:1x24x1024x4,cache_last_channel_len:1
+```
+
+### Dump TRT step‑0 snapshot (streaming encoder override)
+```bash
+LD_LIBRARY_PATH=/home/emmy/git/trt-asr-engine/cpp/build \
+PARAKEET_STREAMING_ENCODER_PATH=/home/emmy/git/trt-asr-engine/models/parakeet-tdt-0.6b-v3/engines_20260107_fp32/encoder_streaming.engine \
+PARAKEET_DISABLE_CACHE=1 \
+PARAKEET_DEBUG_TDT_STEPS=1 \
+PARAKEET_TDT_SNAPSHOT_DIR=/tmp/tdt_snapshot_trt_stream7 \
+rust/target/debug/cli \
+  --model-dir /home/emmy/git/trt-asr-engine/models/parakeet-tdt-0.6b-v3/engines_20260107_fp32 \
+  --stream-sim 0.5 \
+  --device-id 0 \
+  --verbose \
+  eval/wav/librispeech_dev_gate/dev-clean/1272-128104-0000.wav
+```
+
+### Compare ORT encoder vs TRT encoder (step‑0)
+```bash
+python tools/onnxruntime/compare_encoder_step0.py \
+  --trt-dir /tmp/tdt_snapshot_trt_stream7
+```
+
+### Results
+- `enc_out_t0` parity: `max_abs=3.1e-05`, `mean_abs=5.0e-06`, `p99_abs=1.9e-05`
+- Cache inputs at t=0 are zero (`cache_in max_abs: channel=0.0 time=0.0`)
+- `encoder_output` shapes: ORT `[1,1024,2]` vs TRT joint slice `[1,1024,16]` (full‑tensor parity skipped due to shape mismatch)
+
+### Interpretation
+- **TRT streaming encoder matches ORT streaming encoder** on step‑0 given identical inputs and zero caches.
+- Remaining mismatch with PyTorch trace is **not** a TRT encoder bug; the PyTorch trace is still using offline encoder semantics.
+- `cache_last_channel_len_out` returns `-67` with the streaming engine; cache propagation must remain disabled (`PARAKEET_DISABLE_CACHE=1`) until cache‑len semantics are corrected.

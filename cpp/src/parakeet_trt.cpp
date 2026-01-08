@@ -697,6 +697,33 @@ static void write_text_file(const std::string& path, const std::string& text) {
   if (!f) return;
   f << text;
 }
+
+static void cuda_check(cudaError_t e, const char* what);
+static float fp16_to_f32(uint16_t u);
+
+static void dump_device_tensor_f32(const std::string& path,
+                                   void* device_ptr,
+                                   size_t count,
+                                   nvinfer1::DataType dt,
+                                   cudaStream_t stream,
+                                   DebugContext* dbg) {
+  if (!device_ptr || count == 0) return;
+  if (dt == nvinfer1::DataType::kHALF) {
+    std::vector<uint16_t> tmp(count);
+    debug_memcpy_async(tmp.data(), device_ptr, count * 2, cudaMemcpyDeviceToHost, stream,
+                       "snapshot:dev_fp16", dbg);
+    cuda_check(cudaStreamSynchronize(stream), "sync_snapshot_dev_fp16");
+    std::vector<float> out(count);
+    for (size_t i = 0; i < count; ++i) out[i] = fp16_to_f32(tmp[i]);
+    write_f32_file(path, out.data(), out.size());
+  } else if (dt == nvinfer1::DataType::kFLOAT) {
+    std::vector<float> out(count);
+    debug_memcpy_async(out.data(), device_ptr, count * 4, cudaMemcpyDeviceToHost, stream,
+                       "snapshot:dev_fp32", dbg);
+    cuda_check(cudaStreamSynchronize(stream), "sync_snapshot_dev_fp32");
+    write_f32_file(path, out.data(), out.size());
+  }
+}
 // #endregion
 
 static int find_token_id_in_vocab_txt(const std::string& vocab_path, const std::string& token) {
@@ -1124,6 +1151,22 @@ static void* tensor_ptr_or_throw(const TrtEngine& e, const char* name) {
   return it->second;
 }
 
+static void* tensor_ptr_or_null_if_empty(const TrtEngine& e, const char* name) {
+  const char* resolved = resolve_tensor_name(e, name);
+  if (!resolved) {
+    throw std::runtime_error(std::string("Missing tensor binding: ") + name);
+  }
+  const auto it = e.tensors.find(resolved);
+  if (it != e.tensors.end() && it->second) {
+    return it->second;
+  }
+  const auto dims = e.ctx->getTensorShape(resolved);
+  if (volume(dims) == 0) {
+    return nullptr;
+  }
+  throw std::runtime_error(std::string("Missing tensor pointer: ") + resolved);
+}
+
 const char* dtype_name(nvinfer1::DataType dt) {
   switch (dt) {
     case nvinfer1::DataType::kFLOAT:
@@ -1519,6 +1562,9 @@ struct ParakeetSession {
   bool cache_enable_logged = false;
   bool length_logged = false;
   bool enc_len_logged = false;
+  bool cache_batch_first = false;
+  bool cache_ch_out_empty = false;
+  bool cache_tm_out_empty = false;
   int cache_out_state = -1;  // -1 unknown, 0 zero, 1 nonzero
   int64_t cache_len_in = 0;
   int64_t cache_len_capacity = 0;
@@ -1600,6 +1646,7 @@ struct ParakeetSession {
   std::vector<uint16_t> host_joint_logits_fp16;
   std::vector<float> host_joint_logits_f32;
   bool tdt_snapshot_done = false;
+  bool enc_snapshot_done = false;
 
   ParakeetSession(const ParakeetConfig* config)
       : model_dir(config->model_dir), device_id(config->device_id), use_fp16(config->use_fp16),
@@ -1690,7 +1737,15 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
     const bool has_cache_tm_out = engine_has_tensor(session->enc, "cache_last_time_out");
     session->enc_streaming = has_cache_ch && has_cache_tm && has_cache_len && has_cache_len_out && has_cache_ch_out && has_cache_tm_out;
     if (session->enc_streaming) {
+      const auto cache_ch_shape = session->enc.engine->getTensorShape("cache_last_channel");
+      if (cache_ch_shape.nbDims == 4 && cache_ch_shape.d[1] == kEncLayers) {
+        session->cache_batch_first = true;
+      } else if (cache_ch_shape.nbDims == 4 && cache_ch_shape.d[0] == kEncLayers) {
+        session->cache_batch_first = false;
+      }
       std::cerr << "[parakeet_trt] encoder_streaming=1\n";
+      std::cerr << "[parakeet_trt] cache_batch_first=" << (session->cache_batch_first ? "1" : "0")
+                << " cache_last_channel_shape=" << dims_to_string(cache_ch_shape) << "\n";
     }
 
 
@@ -1813,6 +1868,8 @@ void parakeet_reset_utterance(ParakeetSession* session) {
   session->cache_ch_out_ptr = nullptr;
   session->cache_tm_in_ptr = nullptr;
   session->cache_tm_out_ptr = nullptr;
+  session->cache_ch_out_empty = false;
+  session->cache_tm_out_empty = false;
 
   // Prime predictor with NeMo-style prompt tokens once per utterance.
   // This seeds h/c and initializes y_id so decoding can continue across push_features calls.
@@ -2014,8 +2071,13 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     set_input_shape_or_throw(session->enc, "audio_signal", {1, kNMels, T_shape});
     set_input_shape_or_throw(session->enc, "length", {1});
     if (session->enc_streaming) {
-      set_input_shape_or_throw(session->enc, "cache_last_channel", {kEncLayers, 1, kCacheSize, kEncDim});
-      set_input_shape_or_throw(session->enc, "cache_last_time", {kEncLayers, 1, kEncDim, kCacheTime});
+      if (session->cache_batch_first) {
+        set_input_shape_or_throw(session->enc, "cache_last_channel", {1, kEncLayers, kCacheSize, kEncDim});
+        set_input_shape_or_throw(session->enc, "cache_last_time", {1, kEncLayers, kEncDim, kCacheTime});
+      } else {
+        set_input_shape_or_throw(session->enc, "cache_last_channel", {kEncLayers, 1, kCacheSize, kEncDim});
+        set_input_shape_or_throw(session->enc, "cache_last_time", {kEncLayers, 1, kEncDim, kCacheTime});
+      }
       set_input_shape_or_throw(session->enc, "cache_last_channel_len", {1});
     }
     allocate_buffers_for_current_shapes(session->enc, session->stream);
@@ -2036,8 +2098,16 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       if (!session->cache_ptrs_init) {
         session->cache_ch_in_ptr = tensor_ptr_or_throw(session->enc, "cache_last_channel");
         session->cache_tm_in_ptr = tensor_ptr_or_throw(session->enc, "cache_last_time");
-        session->cache_ch_out_ptr = tensor_ptr_or_throw(session->enc, "cache_last_channel_out");
-        session->cache_tm_out_ptr = tensor_ptr_or_throw(session->enc, "cache_last_time_out");
+        session->cache_ch_out_ptr = tensor_ptr_or_null_if_empty(session->enc, "cache_last_channel_out");
+        session->cache_tm_out_ptr = tensor_ptr_or_null_if_empty(session->enc, "cache_last_time_out");
+        session->cache_ch_out_empty = (session->cache_ch_out_ptr == nullptr);
+        session->cache_tm_out_empty = (session->cache_tm_out_ptr == nullptr);
+        if (!session->cache_ch_out_ptr) {
+          session->cache_ch_out_ptr = session->cache_ch_in_ptr;
+        }
+        if (!session->cache_tm_out_ptr) {
+          session->cache_tm_out_ptr = session->cache_tm_in_ptr;
+        }
         session->cache_ptrs_init = true;
         session->enc_cache_zeroed = false;
       }
@@ -2232,24 +2302,81 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
     // Host -> device: audio features.
     nvinfer1::DataType audio_dt = session->enc.engine->getTensorDataType("audio_signal");
+    const char* snapshot_dir = std::getenv("PARAKEET_TDT_SNAPSHOT_DIR");
+    const bool want_enc_snapshot = snapshot_dir && *snapshot_dir && session->enc_streaming && !session->enc_snapshot_done;
+    std::vector<uint16_t> host_audio_fp16;
+    std::vector<float> host_audio_f32;
     if (audio_dt == nvinfer1::DataType::kHALF) {
-      std::vector<uint16_t> host_audio_fp16(static_cast<size_t>(kNMels) * static_cast<size_t>(T_shape), 0);
+      host_audio_fp16.assign(static_cast<size_t>(kNMels) * static_cast<size_t>(T_shape), 0);
       for (int32_t m = 0; m < kNMels; ++m) {
         for (int32_t t = 0; t < T_valid; ++t) {
-          host_audio_fp16[static_cast<size_t>(m) * static_cast<size_t>(T_shape) + static_cast<size_t>(t)] = f32_to_fp16(features_bct_f32[static_cast<size_t>(m) * static_cast<size_t>(T_valid) + static_cast<size_t>(t)]);
+          host_audio_fp16[static_cast<size_t>(m) * static_cast<size_t>(T_shape) + static_cast<size_t>(t)] =
+              f32_to_fp16(features_bct_f32[static_cast<size_t>(m) * static_cast<size_t>(T_valid) + static_cast<size_t>(t)]);
         }
       }
       debug_memcpy_async(session->d_audio, host_audio_fp16.data(), host_audio_fp16.size() * 2,
                          cudaMemcpyHostToDevice, session->stream, "enc:audio_fp16", &session->debug);
     } else {
-      std::vector<float> host_audio_f32(static_cast<size_t>(kNMels) * static_cast<size_t>(T_shape), 0.0f);
+      host_audio_f32.assign(static_cast<size_t>(kNMels) * static_cast<size_t>(T_shape), 0.0f);
       for (int32_t m = 0; m < kNMels; ++m) {
         for (int32_t t = 0; t < T_valid; ++t) {
-          host_audio_f32[static_cast<size_t>(m) * static_cast<size_t>(T_shape) + static_cast<size_t>(t)] = features_bct_f32[static_cast<size_t>(m) * static_cast<size_t>(T_valid) + static_cast<size_t>(t)];
+          host_audio_f32[static_cast<size_t>(m) * static_cast<size_t>(T_shape) + static_cast<size_t>(t)] =
+              features_bct_f32[static_cast<size_t>(m) * static_cast<size_t>(T_valid) + static_cast<size_t>(t)];
         }
       }
       debug_memcpy_async(session->d_audio, host_audio_f32.data(), host_audio_f32.size() * 4,
                          cudaMemcpyHostToDevice, session->stream, "enc:audio_f32", &session->debug);
+    }
+
+    if (want_enc_snapshot) {
+      try {
+        std::filesystem::create_directories(snapshot_dir);
+        const std::string base(snapshot_dir);
+        const std::string feat_path = base + "/features_in_trt.f32";
+        const std::string cache_ch_path = base + "/cache_last_channel_in_trt.f32";
+        const std::string cache_tm_path = base + "/cache_last_time_in_trt.f32";
+        const std::string meta_path = base + "/meta_enc_trt.json";
+
+        if (audio_dt == nvinfer1::DataType::kHALF) {
+          std::vector<float> feat_f32(host_audio_fp16.size());
+          for (size_t i = 0; i < host_audio_fp16.size(); ++i) feat_f32[i] = fp16_to_f32(host_audio_fp16[i]);
+          write_f32_file(feat_path, feat_f32.data(), feat_f32.size());
+        } else {
+          write_f32_file(feat_path, host_audio_f32.data(), host_audio_f32.size());
+        }
+
+        if (session->enc_streaming) {
+          const char* cache_ch_name = resolve_tensor_name(session->enc, "cache_last_channel");
+          const char* cache_tm_name = resolve_tensor_name(session->enc, "cache_last_time");
+          if (cache_ch_name && cache_tm_name) {
+            const auto cache_ch_shape = session->enc.ctx->getTensorShape(cache_ch_name);
+            const auto cache_tm_shape = session->enc.ctx->getTensorShape(cache_tm_name);
+            const auto cache_ch_dt = session->enc.engine->getTensorDataType(cache_ch_name);
+            const auto cache_tm_dt = session->enc.engine->getTensorDataType(cache_tm_name);
+            dump_device_tensor_f32(cache_ch_path, session->d_cache_last_channel, volume(cache_ch_shape), cache_ch_dt,
+                                   session->stream, &session->debug);
+            dump_device_tensor_f32(cache_tm_path, session->d_cache_last_time, volume(cache_tm_shape), cache_tm_dt,
+                                   session->stream, &session->debug);
+
+            std::ostringstream meta;
+            meta << "{"
+                 << "\"features_shape\":[1," << kNMels << "," << T_shape << "],"
+                 << "\"features_valid\":" << T_valid << ","
+                 << "\"features_dtype\":\"" << dtype_name(audio_dt) << "\","
+                 << "\"cache_ch_shape\":" << dims_to_string(cache_ch_shape) << ","
+                 << "\"cache_tm_shape\":" << dims_to_string(cache_tm_shape) << ","
+                 << "\"cache_ch_dtype\":\"" << dtype_name(cache_ch_dt) << "\","
+                 << "\"cache_tm_dtype\":\"" << dtype_name(cache_tm_dt) << "\","
+                 << "\"cache_len_in\":" << session->cache_len_in
+                 << "}";
+            write_text_file(meta_path, meta.str());
+          }
+        }
+        std::cerr << "[parakeet_trt] enc_snapshot dir=" << base << " features=" << feat_path << "\n";
+      } catch (...) {
+        std::cerr << "[parakeet_trt] WARN: failed to write encoder snapshot\n";
+      }
+      session->enc_snapshot_done = true;
     }
 
     const int enc_in_dbg = g_enc_in_stats_n.fetch_add(1, std::memory_order_relaxed);
@@ -2383,8 +2510,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     }
     const int32_t T_enc = static_cast<int32_t>(enc_len_host);
     if (session->enc_streaming) {
-      if (T_enc != 1) {
-        throw std::runtime_error("Streaming contract violated: encoded_lengths != 1");
+      if (T_enc <= 0 || T_enc > T_shape) {
+        throw std::runtime_error("Streaming contract violated: encoded_lengths out of range");
       }
     } else if (T_enc <= 0 || T_enc > T_shape) {
       throw std::runtime_error("Invalid encoded_lengths from encoder");
@@ -2392,8 +2519,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
     if (session->enc_streaming) {
       const auto enc_out_shape = session->enc.ctx->getTensorShape("encoder_output");
-      if (enc_out_shape.nbDims <= 0 || enc_out_shape.d[enc_out_shape.nbDims - 1] != 1) {
-        throw std::runtime_error("Streaming contract violated: encoder_output time_dim != 1 (shape=" +
+      if (enc_out_shape.nbDims <= 0 || enc_out_shape.d[enc_out_shape.nbDims - 1] != T_enc) {
+        throw std::runtime_error("Streaming contract violated: encoder_output time_dim != T_enc (shape=" +
                                  dims_to_string(enc_out_shape) + ")");
       }
     }
@@ -2533,8 +2660,12 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
           if (!session->cache_ptrs_init) {
             throw std::runtime_error("cache propagation enabled but cache pointers not initialized");
           }
-          std::swap(session->cache_ch_in_ptr, session->cache_ch_out_ptr);
-          std::swap(session->cache_tm_in_ptr, session->cache_tm_out_ptr);
+          if (!session->cache_ch_out_empty) {
+            std::swap(session->cache_ch_in_ptr, session->cache_ch_out_ptr);
+          }
+          if (!session->cache_tm_out_empty) {
+            std::swap(session->cache_tm_in_ptr, session->cache_tm_out_ptr);
+          }
         }
       } else {
         session->cache_enabled = false;
@@ -3343,9 +3474,18 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
               }
               write_f32_file(dur_path, dur_logits.data(), dur_logits.size());
 
+              const std::string enc_out_path = base + "/enc_out_t0_trt.f32";
+              std::vector<float> enc_t0(static_cast<size_t>(kEncDim));
+              for (int32_t c = 0; c < kEncDim; ++c) {
+                enc_t0[static_cast<size_t>(c)] =
+                    host_enc_out_f32[static_cast<size_t>(c) * static_cast<size_t>(T_enc) + 0];
+              }
+              write_f32_file(enc_out_path, enc_t0.data(), enc_t0.size());
+
               std::ostringstream meta;
               meta << "{"
                    << "\"enc_shape\":[1," << kEncDim << "," << kTrtChunkT << "],"
+                   << "\"enc_out_t0_shape\":[1," << kEncDim << ",1],"
                    << "\"pred_shape\":[1," << kPredDim << ",1],"
                    << "\"dur_shape\":[" << dur_bins_used << "],"
                    << "\"tok_offset\":" << tok_offset << ","
@@ -3362,6 +3502,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                         << " enc=" << enc_path
                         << " pred=" << pred_path
                         << " dur=" << dur_path
+                        << " enc_out_t0=" << enc_out_path
                         << "\n";
             } catch (...) {
               std::cerr << "[parakeet_trt] WARN: failed to write TDT snapshot\n";
