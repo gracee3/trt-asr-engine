@@ -1596,6 +1596,39 @@ struct ParakeetSession {
   }
 };
 
+static void log_engine_provenance(const std::string& name, const std::string& path, size_t bytes) {
+  namespace fs = std::filesystem;
+  std::string abs_path = path;
+  try {
+    abs_path = fs::absolute(path).string();
+  } catch (...) {
+    // keep best-effort path
+  }
+  std::string mtime_str = "<unknown>";
+  try {
+    auto ftime = fs::last_write_time(path);
+    auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+    std::time_t cftime = std::chrono::system_clock::to_time_t(sctp);
+    std::tm tm_buf{};
+#if defined(_WIN32)
+    localtime_s(&tm_buf, &cftime);
+#else
+    localtime_r(&cftime, &tm_buf);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&tm_buf, "%Y-%m-%d %H:%M:%S");
+    mtime_str = oss.str();
+  } catch (...) {
+    // keep best-effort mtime
+  }
+  std::cerr << "[parakeet_trt] engine_provenance name=" << name
+            << " path=" << abs_path
+            << " bytes=" << bytes
+            << " mtime=" << mtime_str
+            << "\n";
+}
+
 ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
   if (!config || !config->model_dir) return nullptr;
   try {
@@ -1622,6 +1655,7 @@ ParakeetSession* parakeet_create_session(const ParakeetConfig* config) {
       const std::string path =
           (explicit_path && *explicit_path) ? std::string(explicit_path) : (session->model_dir + "/" + name + ".engine");
       auto data = read_file(path);
+      log_engine_provenance(name, path, data.size());
       nvinfer1::ICudaEngine* raw_engine = session->runtime->deserializeCudaEngine(data.data(), data.size());
       if (!raw_engine) throw std::runtime_error("Failed to deserialize engine: " + path);
       nvinfer1::IExecutionContext* raw_ctx = raw_engine->createExecutionContext();
