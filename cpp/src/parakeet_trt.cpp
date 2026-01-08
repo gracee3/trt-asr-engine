@@ -43,6 +43,9 @@ constexpr int32_t kPredLayers = 2;
 constexpr int32_t kNMels = 128;
 constexpr int32_t kTrtMinT = 16;              // current engine profiles are built with min T=16
 constexpr int32_t kTrtChunkT = 16;            // decode using T=16 joint slices (first timestep)
+constexpr int32_t kStreamMinT = 41;           // streaming encoder min profile T (cache3 schedule)
+constexpr int32_t kStreamPadT0 = 41;          // expected chunk0 T (cache3 schedule)
+constexpr int32_t kStreamPadT1 = 57;          // expected chunk>=1 T (cache3 schedule)
 constexpr int32_t kCacheSize = 256;
 constexpr int32_t kCacheTime = 4;
 
@@ -2064,9 +2067,21 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
     const int32_t T_valid = static_cast<int32_t>(num_frames);
     int32_t T_shape = T_valid;
+    bool padded_tail = false;
     if (session->enc_streaming) {
       if (T_valid > max_frames) {
         throw std::runtime_error("num_frames exceeds PARAKEET_MAX_FRAMES_PER_PUSH in streaming mode");
+      }
+      if (T_valid < kStreamMinT) {
+        const bool first_chunk = session->cache_len_in == 0;
+        const int32_t expected = first_chunk ? kStreamPadT0 : kStreamPadT1;
+        T_shape = std::max<int32_t>(kStreamMinT, expected);
+        padded_tail = true;
+        std::cerr << "[parakeet_trt] pad_tail_chunk T_valid=" << T_valid
+                  << " T_shape=" << T_shape
+                  << " first_chunk=" << (first_chunk ? 1 : 0)
+                  << " cache_len_in=" << session->cache_len_in
+                  << "\n";
       }
     } else {
       // Encoder engines are currently profiled for 16..256 frames.
@@ -2520,7 +2535,10 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
     }
     const int32_t T_enc = static_cast<int32_t>(enc_len_host);
     if (session->enc_streaming) {
-      if (T_enc <= 0 || T_enc > T_shape) {
+      if (T_enc < 0 || T_enc > T_shape) {
+        throw std::runtime_error("Streaming contract violated: encoded_lengths out of range");
+      }
+      if (!padded_tail && T_enc == 0) {
         throw std::runtime_error("Streaming contract violated: encoded_lengths out of range");
       }
     } else if (T_enc <= 0 || T_enc > T_shape) {
@@ -2529,9 +2547,20 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
 
     if (session->enc_streaming) {
       const auto enc_out_shape = session->enc.ctx->getTensorShape("encoder_output");
-      if (enc_out_shape.nbDims <= 0 || enc_out_shape.d[enc_out_shape.nbDims - 1] != T_enc) {
-        throw std::runtime_error("Streaming contract violated: encoder_output time_dim != T_enc (shape=" +
+      if (enc_out_shape.nbDims <= 0) {
+        throw std::runtime_error("Streaming contract violated: encoder_output has empty shape");
+      }
+      const int32_t enc_t = enc_out_shape.d[enc_out_shape.nbDims - 1];
+      if (enc_t < T_enc) {
+        throw std::runtime_error("Streaming contract violated: encoder_output time_dim < T_enc (shape=" +
                                  dims_to_string(enc_out_shape) + ")");
+      }
+      if (padded_tail && enc_t != T_enc) {
+        std::cerr << "[parakeet_trt] padded_tail_enc_out enc_t=" << enc_t
+                  << " T_enc=" << T_enc
+                  << " T_valid=" << T_valid
+                  << " T_shape=" << T_shape
+                  << "\n";
       }
     }
 
@@ -2541,7 +2570,8 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
         "cpp/src/parakeet_trt.cpp:parakeet_push_features:enc",
         "Encoded lengths",
         std::string("{\"T_valid\":") + std::to_string(T_valid) + ",\"T_shape\":" +
-            std::to_string(T_shape) + ",\"T_enc\":" + std::to_string(T_enc) + "}");
+            std::to_string(T_shape) + ",\"T_enc\":" + std::to_string(T_enc) +
+            ",\"padded_tail\":" + (padded_tail ? std::string("true") : std::string("false")) + "}");
     // #endregion
 
     if (session->enc_streaming) {

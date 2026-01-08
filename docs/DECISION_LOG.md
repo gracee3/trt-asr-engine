@@ -77,3 +77,8 @@
   Alternatives: keep TF32 enabled and relax cache_time tolerances.
   Evidence: TF32-enabled TRT parity shows 5/50 cache_last_time_out failures (max_abs `3.614e-01`); `--noTF32` build passes 50/50 with cache_time max_abs ≤ `1.416e-04` and encoder_output max_abs `1.974e-07`.
   Validation: `artifacts/parity/trt_streaming_parity_cache3_fp32_t57_noTF32_50.json` reports `failed=0`.
+
+- Decision: Pad tail streaming chunks shorter than `T=41` up to the streaming profile target while keeping `length=T_actual`.
+  Alternatives: drop tail chunks or broaden TRT profile min T.
+  Evidence: Tail chunks <41 previously caused TRT shape errors; after padding + relaxed `encoder_output` time-dim check, untrimmed 1‑utt and 10‑utt runs succeed with 0 empty transcripts.
+  Validation: `artifacts/logs/tdt_1utt_trt_fp32_noTF32_untrimmed.*` and `artifacts/logs/tdt_10utt_fp32_noTF32_untrimmed/all_results.json`.
