@@ -75,3 +75,18 @@ between TRT encoder/joint outputs vs PyTorch (argmax flip on a close duration pa
 - Run **encoder parity** on the dumped feature chunk (PyTorch vs ORT vs TRT) to localize the argmax flip.
 - If encoder parity is tight, add a **duration‑head margin diagnostic** and consider tolerating swaps
   when top‑1/top‑2 are within a small epsilon, or switch to ORT for correctness baselines.
+
+## Step‑0 Snapshot Triage (ORT joint on swapped inputs)
+- Command:
+  ```bash
+  python tools/onnxruntime/compare_joint_step0.py \
+    --onnx tools/export_onnx/out/joint.onnx \
+    --trt-dir /tmp/tdt_snapshot_trt \
+    --pt-dir /tmp/tdt_snapshot_pt
+  ```
+- Results:
+  - `enc_pt + pred_pt` → best_dur_idx=1 (PyTorch baseline)
+  - `enc_trt + pred_trt` → best_dur_idx=0
+  - `enc_trt + pred_pt` → best_dur_idx=0
+  - `enc_pt + pred_trt` → best_dur_idx=1
+- Interpretation: **encoder output drift is the root cause** (predictor matches; joint behaves consistently under ORT when fed the same inputs).

@@ -131,6 +131,27 @@ def load_contract_heads(path: str) -> Tuple[int, int, List[int], int]:
     return int(tok["offset"]), int(tok["size"]), list(duration_values), int(blank_id)
 
 
+def dump_step0_bundle(out_dir: str, enc_slice: torch.Tensor, g: torch.Tensor, dur_logits: np.ndarray,
+                      meta: Dict[str, int]) -> None:
+    os.makedirs(out_dir, exist_ok=True)
+    enc_np = enc_slice.detach().cpu().numpy().astype(np.float32, copy=False)
+    g_np = g.detach().cpu().numpy().astype(np.float32, copy=False)
+    enc_path = os.path.join(out_dir, "enc_slice_pt.f32")
+    pred_path = os.path.join(out_dir, "pred_g_pt.f32")
+    dur_path = os.path.join(out_dir, "dur_logits_pt.f32")
+    enc_np.tofile(enc_path)
+    g_np.tofile(pred_path)
+    dur_logits.astype(np.float32).tofile(dur_path)
+    meta_out = {
+        "enc_shape": list(enc_np.shape),
+        "pred_shape": list(g_np.shape),
+        "dur_shape": list(dur_logits.shape),
+        **meta,
+    }
+    with open(os.path.join(out_dir, "meta_pt.json"), "w", encoding="utf-8") as f:
+        json.dump(meta_out, f, indent=2)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Emit a per-step TDT decode trace from PyTorch (logits-level).")
     ap.add_argument("--model", default="models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo")
@@ -151,6 +172,7 @@ def main() -> int:
     ap.add_argument("--dur-topk", type=int, default=5)
     ap.add_argument("--y0-override", type=int, default=-1)
     ap.add_argument("--no-prime", action="store_true", help="Skip NeMo-style start/lang priming")
+    ap.add_argument("--dump-step0-dir", default="", help="Dump step-0 enc slice + pred g + dur logits (raw f32)")
     ap.add_argument("--out", required=True, help="Output JSONL trace path")
     args = ap.parse_args()
 
@@ -273,6 +295,23 @@ def main() -> int:
                         if best_tok == blank_id and duration == 0:
                             advance = 1
                             blank_dur0_clamped = True
+
+                        if args.dump_step0_dir and step_idx == 0 and time_idx == 0 and u == 0:
+                            dump_step0_bundle(
+                                args.dump_step0_dir,
+                                enc_slice,
+                                g,
+                                dur_logits,
+                                {
+                                    "tok_offset": tok_offset,
+                                    "dur_offset": dur_offset,
+                                    "token_span": tok_size,
+                                    "dur_bins_used": dur_size,
+                                    "best_tok": best_tok,
+                                    "best_dur_idx": best_dur_idx,
+                                    "y_id": int(y_id),
+                                },
+                            )
 
                         record = {
                             "type": "step",

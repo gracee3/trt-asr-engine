@@ -685,6 +685,18 @@ static void dbglog_ndjson(const char* hypothesisId,
     << message << "\",\"data\":" << data_json << ",\"timestamp\":" << now_ms
     << "}\n";
 }
+
+static void write_f32_file(const std::string& path, const float* data, size_t count) {
+  std::ofstream f(path, std::ios::out | std::ios::binary);
+  if (!f) return;
+  f.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(count * sizeof(float)));
+}
+
+static void write_text_file(const std::string& path, const std::string& text) {
+  std::ofstream f(path, std::ios::out);
+  if (!f) return;
+  f << text;
+}
 // #endregion
 
 static int find_token_id_in_vocab_txt(const std::string& vocab_path, const std::string& token) {
@@ -1587,6 +1599,7 @@ struct ParakeetSession {
 
   std::vector<uint16_t> host_joint_logits_fp16;
   std::vector<float> host_joint_logits_f32;
+  bool tdt_snapshot_done = false;
 
   ParakeetSession(const ParakeetConfig* config)
       : model_dir(config->model_dir), device_id(config->device_id), use_fp16(config->use_fp16),
@@ -3287,6 +3300,74 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                     << " dur_lse=" << dur_lse
                     << "\n";
           ++debug_tdt_emitted;
+        }
+
+        if (time_idx == 0 && u == 0 && !session->tdt_snapshot_done) {
+          const char* snapshot_dir = std::getenv("PARAKEET_TDT_SNAPSHOT_DIR");
+          if (snapshot_dir && *snapshot_dir) {
+            try {
+              std::filesystem::create_directories(snapshot_dir);
+              const std::string base(snapshot_dir);
+              const std::string enc_path = base + "/enc_slice_trt.f32";
+              const std::string pred_path = base + "/pred_g_trt.f32";
+              const std::string dur_path = base + "/dur_logits_trt.f32";
+              const std::string meta_path = base + "/meta_trt.json";
+
+              // Dump encoder slice (as fed to joint): [1, D_enc, kTrtChunkT].
+              write_f32_file(enc_path, host_joint_enc_slice_f32.data(),
+                             static_cast<size_t>(kEncDim) * static_cast<size_t>(kTrtChunkT));
+
+              // Dump predictor output (as fed to joint): [1, D_pred, 1].
+              const char* pred_name = resolve_tensor_name(session->joint, "predictor_output");
+              nvinfer1::DataType pred_dt = pred_name ? session->joint.engine->getTensorDataType(pred_name) : nvinfer1::DataType::kFLOAT;
+              const auto pred_shape = pred_name ? session->joint.ctx->getTensorShape(pred_name) : session->joint.ctx->getTensorShape("predictor_output");
+              const size_t pred_count = volume(pred_shape);
+              std::vector<float> pred_f32(pred_count);
+              if (pred_dt == nvinfer1::DataType::kHALF) {
+                std::vector<uint16_t> pred_h16(pred_count);
+                debug_memcpy_async(pred_h16.data(), session->d_joint_pred_in, pred_count * 2,
+                                   cudaMemcpyDeviceToHost, session->stream, "snapshot:pred_fp16", &session->debug);
+                cuda_check(cudaStreamSynchronize(session->stream), "sync_snapshot_pred");
+                for (size_t i = 0; i < pred_count; ++i) pred_f32[i] = fp16_to_f32(pred_h16[i]);
+              } else {
+                debug_memcpy_async(pred_f32.data(), session->d_joint_pred_in, pred_count * 4,
+                                   cudaMemcpyDeviceToHost, session->stream, "snapshot:pred_fp32", &session->debug);
+                cuda_check(cudaStreamSynchronize(session->stream), "sync_snapshot_pred");
+              }
+              write_f32_file(pred_path, pred_f32.data(), pred_f32.size());
+
+              // Dump duration logits (head slice).
+              std::vector<float> dur_logits(static_cast<size_t>(dur_bins_used));
+              for (int i = 0; i < dur_bins_used; ++i) {
+                dur_logits[static_cast<size_t>(i)] = head_logits[static_cast<size_t>(dur_offset + i)];
+              }
+              write_f32_file(dur_path, dur_logits.data(), dur_logits.size());
+
+              std::ostringstream meta;
+              meta << "{"
+                   << "\"enc_shape\":[1," << kEncDim << "," << kTrtChunkT << "],"
+                   << "\"pred_shape\":[1," << kPredDim << ",1],"
+                   << "\"dur_shape\":[" << dur_bins_used << "],"
+                   << "\"tok_offset\":" << tok_offset << ","
+                   << "\"dur_offset\":" << dur_offset << ","
+                   << "\"token_span\":" << token_span << ","
+                   << "\"dur_bins_used\":" << dur_bins_used << ","
+                   << "\"best_tok\":" << best_tok << ","
+                   << "\"best_dur_idx\":" << best_dur_idx << ","
+                   << "\"y_id\":" << y_id
+                   << "}";
+              write_text_file(meta_path, meta.str());
+
+              std::cerr << "[parakeet_trt] tdt_snapshot dir=" << base
+                        << " enc=" << enc_path
+                        << " pred=" << pred_path
+                        << " dur=" << dur_path
+                        << "\n";
+            } catch (...) {
+              std::cerr << "[parakeet_trt] WARN: failed to write TDT snapshot\n";
+            }
+            session->tdt_snapshot_done = true;
+          }
         }
 
         if (best_tok != kBlankId) {
