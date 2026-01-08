@@ -1,0 +1,748 @@
+{
+  "mode": "closed_loop",
+  "engine": "/home/emmy/git/trt-asr-engine/models/parakeet-tdt-0.6b-v3/engines_20260108_cache3_fp32_t57/encoder_streaming.engine",
+  "ref": "artifacts/reference/stream_ref_cache3_50.jsonl",
+  "zero_feed_cache": false,
+  "total_chunks": 50,
+  "passed": 0,
+  "failed": 50,
+  "pass_rate": 0.0,
+  "atol": 0.0001,
+  "rtol": 0.0001,
+  "cache_atol": 0.0001,
+  "timing_ms": {
+    "mean": 18.950001398916356,
+    "p50": 17.428065999411047,
+    "p95": 24.070974164351355,
+    "p99": 38.70064090442606
+  },
+  "encoder_output_error_distribution": {
+    "min": 2.8324779123067856e-05,
+    "max": 0.0006388239562511444,
+    "mean": 0.00011471451955003432,
+    "p95": 0.00023990804329514483,
+    "p99": 0.00046776097267866066
+  },
+  "chunk_stats": [
+    {
+      "chunk": 0,
+      "encoder_output_max_abs": 2.8324779123067856e-05,
+      "encoder_output_mean_abs": 6.054827678884471e-06,
+      "passed": false
+    },
+    {
+      "chunk": 1,
+      "encoder_output_max_abs": 9.670108556747437e-05,
+      "encoder_output_mean_abs": 1.1809874426218133e-05,
+      "passed": false
+    },
+    {
+      "chunk": 2,
+      "encoder_output_max_abs": 6.018020212650299e-05,
+      "encoder_output_mean_abs": 8.193724591136023e-06,
+      "passed": false
+    },
+    {
+      "chunk": 3,
+      "encoder_output_max_abs": 4.6154484152793884e-05,
+      "encoder_output_mean_abs": 7.641501252468133e-06,
+      "passed": false
+    },
+    {
+      "chunk": 4,
+      "encoder_output_max_abs": 0.0006388239562511444,
+      "encoder_output_mean_abs": 4.5051048534287354e-05,
+      "passed": false
+    },
+    {
+      "chunk": 5,
+      "encoder_output_max_abs": 0.0002722814679145813,
+      "encoder_output_mean_abs": 2.5055389567688973e-05,
+      "passed": false
+    },
+    {
+      "chunk": 6,
+      "encoder_output_max_abs": 8.517131209373474e-05,
+      "encoder_output_mean_abs": 1.0529398556465471e-05,
+      "passed": false
+    },
+    {
+      "chunk": 7,
+      "encoder_output_max_abs": 0.00013391301035881042,
+      "encoder_output_mean_abs": 1.2815817710953858e-05,
+      "passed": false
+    },
+    {
+      "chunk": 8,
+      "encoder_output_max_abs": 0.00018109753727912903,
+      "encoder_output_mean_abs": 1.779302450777287e-05,
+      "passed": false
+    },
+    {
+      "chunk": 9,
+      "encoder_output_max_abs": 0.00028971582651138306,
+      "encoder_output_mean_abs": 2.231989641584183e-05,
+      "passed": false
+    },
+    {
+      "chunk": 10,
+      "encoder_output_max_abs": 7.293187081813812e-05,
+      "encoder_output_mean_abs": 1.0185397403790949e-05,
+      "passed": false
+    },
+    {
+      "chunk": 11,
+      "encoder_output_max_abs": 0.00015125417667150032,
+      "encoder_output_mean_abs": 1.6667243215418015e-05,
+      "passed": false
+    },
+    {
+      "chunk": 12,
+      "encoder_output_max_abs": 0.0001809271052479744,
+      "encoder_output_mean_abs": 1.6815649567458735e-05,
+      "passed": false
+    },
+    {
+      "chunk": 13,
+      "encoder_output_max_abs": 8.384435204789042e-05,
+      "encoder_output_mean_abs": 1.073610544351696e-05,
+      "passed": false
+    },
+    {
+      "chunk": 14,
+      "encoder_output_max_abs": 0.00010583922266960144,
+      "encoder_output_mean_abs": 1.1577803312290413e-05,
+      "passed": false
+    },
+    {
+      "chunk": 15,
+      "encoder_output_max_abs": 0.00013542920351028442,
+      "encoder_output_mean_abs": 1.704966776642595e-05,
+      "passed": false
+    },
+    {
+      "chunk": 16,
+      "encoder_output_max_abs": 0.00020034052431583405,
+      "encoder_output_mean_abs": 1.839357431140017e-05,
+      "passed": false
+    },
+    {
+      "chunk": 17,
+      "encoder_output_max_abs": 8.673220872879028e-05,
+      "encoder_output_mean_abs": 1.0417447155131043e-05,
+      "passed": false
+    },
+    {
+      "chunk": 18,
+      "encoder_output_max_abs": 9.363144636154175e-05,
+      "encoder_output_mean_abs": 1.2110439704948739e-05,
+      "passed": false
+    },
+    {
+      "chunk": 19,
+      "encoder_output_max_abs": 5.104765295982361e-05,
+      "encoder_output_mean_abs": 9.301537366261195e-06,
+      "passed": false
+    },
+    {
+      "chunk": 20,
+      "encoder_output_max_abs": 8.727516978979111e-05,
+      "encoder_output_mean_abs": 9.54927420796873e-06,
+      "passed": false
+    },
+    {
+      "chunk": 21,
+      "encoder_output_max_abs": 8.958950638771057e-05,
+      "encoder_output_mean_abs": 1.1473945434659072e-05,
+      "passed": false
+    },
+    {
+      "chunk": 22,
+      "encoder_output_max_abs": 0.00012246891856193542,
+      "encoder_output_mean_abs": 1.2689840889497836e-05,
+      "passed": false
+    },
+    {
+      "chunk": 23,
+      "encoder_output_max_abs": 7.217563688755035e-05,
+      "encoder_output_mean_abs": 9.634442142377372e-06,
+      "passed": false
+    },
+    {
+      "chunk": 24,
+      "encoder_output_max_abs": 0.00010118167847394943,
+      "encoder_output_mean_abs": 1.1524049051100013e-05,
+      "passed": false
+    },
+    {
+      "chunk": 25,
+      "encoder_output_max_abs": 7.625855505466461e-05,
+      "encoder_output_mean_abs": 1.037502794224802e-05,
+      "passed": false
+    },
+    {
+      "chunk": 26,
+      "encoder_output_max_abs": 0.00010795705020427704,
+      "encoder_output_mean_abs": 1.4181290127757151e-05,
+      "passed": false
+    },
+    {
+      "chunk": 27,
+      "encoder_output_max_abs": 8.377432823181152e-05,
+      "encoder_output_mean_abs": 1.1166021374187096e-05,
+      "passed": false
+    },
+    {
+      "chunk": 28,
+      "encoder_output_max_abs": 0.00019041448831558228,
+      "encoder_output_mean_abs": 2.0474338372156176e-05,
+      "passed": false
+    },
+    {
+      "chunk": 29,
+      "encoder_output_max_abs": 0.0001274198293685913,
+      "encoder_output_mean_abs": 1.189537833345966e-05,
+      "passed": false
+    },
+    {
+      "chunk": 30,
+      "encoder_output_max_abs": 0.00011066719889640808,
+      "encoder_output_mean_abs": 1.3374713287402548e-05,
+      "passed": false
+    },
+    {
+      "chunk": 31,
+      "encoder_output_max_abs": 8.66129994392395e-05,
+      "encoder_output_mean_abs": 1.2261816129270168e-05,
+      "passed": false
+    },
+    {
+      "chunk": 32,
+      "encoder_output_max_abs": 0.00013466551899909973,
+      "encoder_output_mean_abs": 1.180075779757169e-05,
+      "passed": false
+    },
+    {
+      "chunk": 33,
+      "encoder_output_max_abs": 8.455943316221237e-05,
+      "encoder_output_mean_abs": 1.1042524047747785e-05,
+      "passed": false
+    },
+    {
+      "chunk": 34,
+      "encoder_output_max_abs": 7.141754031181335e-05,
+      "encoder_output_mean_abs": 9.838378154528963e-06,
+      "passed": false
+    },
+    {
+      "chunk": 35,
+      "encoder_output_max_abs": 5.7501718401908875e-05,
+      "encoder_output_mean_abs": 8.392197110647833e-06,
+      "passed": false
+    },
+    {
+      "chunk": 36,
+      "encoder_output_max_abs": 9.35560092329979e-05,
+      "encoder_output_mean_abs": 1.092612703849453e-05,
+      "passed": false
+    },
+    {
+      "chunk": 37,
+      "encoder_output_max_abs": 9.728968143463135e-05,
+      "encoder_output_mean_abs": 9.759364299236998e-06,
+      "passed": false
+    },
+    {
+      "chunk": 38,
+      "encoder_output_max_abs": 5.960837006568909e-05,
+      "encoder_output_mean_abs": 8.057192253977755e-06,
+      "passed": false
+    },
+    {
+      "chunk": 39,
+      "encoder_output_max_abs": 0.00013927649706602097,
+      "encoder_output_mean_abs": 1.4547477443111837e-05,
+      "passed": false
+    },
+    {
+      "chunk": 40,
+      "encoder_output_max_abs": 7.265247404575348e-05,
+      "encoder_output_mean_abs": 8.4752189980312e-06,
+      "passed": false
+    },
+    {
+      "chunk": 41,
+      "encoder_output_max_abs": 7.552281022071838e-05,
+      "encoder_output_mean_abs": 8.994790337076472e-06,
+      "passed": false
+    },
+    {
+      "chunk": 42,
+      "encoder_output_max_abs": 8.929334580898285e-05,
+      "encoder_output_mean_abs": 1.0965064081047693e-05,
+      "passed": false
+    },
+    {
+      "chunk": 43,
+      "encoder_output_max_abs": 7.332116365432739e-05,
+      "encoder_output_mean_abs": 1.1463000205491625e-05,
+      "passed": false
+    },
+    {
+      "chunk": 44,
+      "encoder_output_max_abs": 9.690597653388977e-05,
+      "encoder_output_mean_abs": 9.80930526117696e-06,
+      "passed": false
+    },
+    {
+      "chunk": 45,
+      "encoder_output_max_abs": 0.00012317695654928684,
+      "encoder_output_mean_abs": 1.5994851424878016e-05,
+      "passed": false
+    },
+    {
+      "chunk": 46,
+      "encoder_output_max_abs": 5.6658871471881866e-05,
+      "encoder_output_mean_abs": 8.589000471552014e-06,
+      "passed": false
+    },
+    {
+      "chunk": 47,
+      "encoder_output_max_abs": 5.372241139411926e-05,
+      "encoder_output_mean_abs": 9.71845656076257e-06,
+      "passed": false
+    },
+    {
+      "chunk": 48,
+      "encoder_output_max_abs": 4.247110337018967e-05,
+      "encoder_output_mean_abs": 8.594163201314231e-06,
+      "passed": false
+    },
+    {
+      "chunk": 49,
+      "encoder_output_max_abs": 6.39893114566803e-05,
+      "encoder_output_mean_abs": 8.94881333592575e-06,
+      "passed": false
+    }
+  ],
+  "failures": [
+    {
+      "chunk": 0,
+      "errors": [
+        "cache_last_channel_out: max_abs=1.161e-04 mean_abs=4.825e-08 max_rel=5.706e+00",
+        "cache_last_time_out: max_abs=8.628e-03 mean_abs=3.567e-04 max_rel=1.114e+02"
+      ],
+      "encoder_output_max_abs": 2.8324779123067856e-05
+    },
+    {
+      "chunk": 1,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.214e-04 mean_abs=4.824e-07 max_rel=2.106e+01",
+        "cache_last_time_out: max_abs=2.404e-02 mean_abs=8.624e-04 max_rel=8.446e+01"
+      ],
+      "encoder_output_max_abs": 9.670108556747437e-05
+    },
+    {
+      "chunk": 2,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.214e-04 mean_abs=8.425e-07 max_rel=2.509e+01",
+        "cache_last_time_out: max_abs=2.417e-02 mean_abs=1.046e-03 max_rel=1.360e+02"
+      ],
+      "encoder_output_max_abs": 6.018020212650299e-05
+    },
+    {
+      "chunk": 3,
+      "errors": [
+        "cache_last_channel_out: max_abs=6.459e-04 mean_abs=1.281e-06 max_rel=1.429e+02"
+      ],
+      "encoder_output_max_abs": 4.6154484152793884e-05
+    },
+    {
+      "chunk": 4,
+      "errors": [
+        "encoder_output: max_abs=6.388e-04 mean_abs=4.505e-05 max_rel=2.556e+01",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=4.816e-06 max_rel=2.635e+02",
+        "cache_last_time_out: max_abs=3.614e-01 mean_abs=7.039e-03 max_rel=1.927e+02"
+      ],
+      "encoder_output_max_abs": 0.0006388239562511444
+    },
+    {
+      "chunk": 5,
+      "errors": [
+        "encoder_output: max_abs=2.723e-04 mean_abs=2.506e-05 max_rel=2.671e+00",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=6.109e-06 max_rel=2.635e+02",
+        "cache_last_time_out: max_abs=5.982e-02 mean_abs=2.327e-03 max_rel=3.297e+02"
+      ],
+      "encoder_output_max_abs": 0.0002722814679145813
+    },
+    {
+      "chunk": 6,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=6.799e-06 max_rel=2.849e+02",
+        "cache_last_time_out: max_abs=4.746e-02 mean_abs=2.014e-03 max_rel=8.201e+01"
+      ],
+      "encoder_output_max_abs": 8.517131209373474e-05
+    },
+    {
+      "chunk": 7,
+      "errors": [
+        "encoder_output: max_abs=1.339e-04 mean_abs=1.282e-05 max_rel=8.317e+00",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=7.553e-06 max_rel=2.849e+02",
+        "cache_last_time_out: max_abs=5.969e-02 mean_abs=2.083e-03 max_rel=2.288e+02"
+      ],
+      "encoder_output_max_abs": 0.00013391301035881042
+    },
+    {
+      "chunk": 8,
+      "errors": [
+        "encoder_output: max_abs=1.811e-04 mean_abs=1.779e-05 max_rel=1.831e+01",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=8.869e-06 max_rel=3.602e+02",
+        "cache_last_time_out: max_abs=7.007e-02 mean_abs=2.771e-03 max_rel=8.294e+01"
+      ],
+      "encoder_output_max_abs": 0.00018109753727912903
+    },
+    {
+      "chunk": 9,
+      "errors": [
+        "encoder_output: max_abs=2.897e-04 mean_abs=2.232e-05 max_rel=3.717e+02",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=1.044e-05 max_rel=3.602e+02",
+        "cache_last_time_out: max_abs=1.110e-01 mean_abs=3.718e-03 max_rel=1.833e+02"
+      ],
+      "encoder_output_max_abs": 0.00028971582651138306
+    },
+    {
+      "chunk": 10,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=1.120e-05 max_rel=3.602e+02",
+        "cache_last_time_out: max_abs=6.313e-02 mean_abs=2.098e-03 max_rel=6.997e+01"
+      ],
+      "encoder_output_max_abs": 7.293187081813812e-05
+    },
+    {
+      "chunk": 11,
+      "errors": [
+        "encoder_output: max_abs=1.513e-04 mean_abs=1.667e-05 max_rel=1.292e+01",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=1.199e-05 max_rel=3.602e+02",
+        "cache_last_time_out: max_abs=6.533e-02 mean_abs=2.222e-03 max_rel=7.648e+01"
+      ],
+      "encoder_output_max_abs": 0.00015125417667150032
+    },
+    {
+      "chunk": 12,
+      "errors": [
+        "encoder_output: max_abs=1.809e-04 mean_abs=1.682e-05 max_rel=7.414e+00",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=1.319e-05 max_rel=3.602e+02",
+        "cache_last_time_out: max_abs=1.085e-01 mean_abs=3.101e-03 max_rel=2.253e+03"
+      ],
+      "encoder_output_max_abs": 0.0001809271052479744
+    },
+    {
+      "chunk": 13,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=1.397e-05 max_rel=3.602e+02",
+        "cache_last_time_out: max_abs=9.290e-02 mean_abs=2.410e-03 max_rel=5.420e+01"
+      ],
+      "encoder_output_max_abs": 8.384435204789042e-05
+    },
+    {
+      "chunk": 14,
+      "errors": [
+        "encoder_output: max_abs=1.058e-04 mean_abs=1.158e-05 max_rel=3.362e+00",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=1.470e-05 max_rel=3.602e+02",
+        "cache_last_time_out: max_abs=5.546e-02 mean_abs=2.057e-03 max_rel=1.222e+02"
+      ],
+      "encoder_output_max_abs": 0.00010583922266960144
+    },
+    {
+      "chunk": 15,
+      "errors": [
+        "encoder_output: max_abs=1.354e-04 mean_abs=1.705e-05 max_rel=6.086e+00",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=1.549e-05 max_rel=3.602e+02",
+        "cache_last_time_out: max_abs=8.230e-02 mean_abs=2.137e-03 max_rel=5.085e+01"
+      ],
+      "encoder_output_max_abs": 0.00013542920351028442
+    },
+    {
+      "chunk": 16,
+      "errors": [
+        "encoder_output: max_abs=2.003e-04 mean_abs=1.839e-05 max_rel=1.193e+01",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=1.692e-05 max_rel=3.602e+02",
+        "cache_last_time_out: max_abs=1.297e-01 mean_abs=2.895e-03 max_rel=2.651e+02"
+      ],
+      "encoder_output_max_abs": 0.00020034052431583405
+    },
+    {
+      "chunk": 17,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=1.788e-05 max_rel=4.235e+02",
+        "cache_last_time_out: max_abs=1.028e-01 mean_abs=2.294e-03 max_rel=7.408e+01"
+      ],
+      "encoder_output_max_abs": 8.673220872879028e-05
+    },
+    {
+      "chunk": 18,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=1.882e-05 max_rel=4.235e+02",
+        "cache_last_time_out: max_abs=5.959e-02 mean_abs=2.271e-03 max_rel=8.432e+01"
+      ],
+      "encoder_output_max_abs": 9.363144636154175e-05
+    },
+    {
+      "chunk": 19,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=1.972e-05 max_rel=4.235e+02",
+        "cache_last_time_out: max_abs=5.602e-02 mean_abs=2.145e-03 max_rel=2.300e+03"
+      ],
+      "encoder_output_max_abs": 5.104765295982361e-05
+    },
+    {
+      "chunk": 20,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.037e-05 max_rel=4.235e+02",
+        "cache_last_time_out: max_abs=5.007e-02 mean_abs=1.896e-03 max_rel=3.109e+01"
+      ],
+      "encoder_output_max_abs": 8.727516978979111e-05
+    },
+    {
+      "chunk": 21,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.099e-05 max_rel=4.235e+02",
+        "cache_last_time_out: max_abs=5.746e-02 mean_abs=1.829e-03 max_rel=5.015e+01"
+      ],
+      "encoder_output_max_abs": 8.958950638771057e-05
+    },
+    {
+      "chunk": 22,
+      "errors": [
+        "encoder_output: max_abs=1.225e-04 mean_abs=1.269e-05 max_rel=3.117e+00",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.172e-05 max_rel=4.235e+02",
+        "cache_last_time_out: max_abs=5.611e-02 mean_abs=1.868e-03 max_rel=1.341e+02"
+      ],
+      "encoder_output_max_abs": 0.00012246891856193542
+    },
+    {
+      "chunk": 23,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.238e-05 max_rel=4.235e+02",
+        "cache_last_time_out: max_abs=4.206e-02 mean_abs=1.753e-03 max_rel=6.949e+01"
+      ],
+      "encoder_output_max_abs": 7.217563688755035e-05
+    },
+    {
+      "chunk": 24,
+      "errors": [
+        "encoder_output: max_abs=1.012e-04 mean_abs=1.152e-05 max_rel=8.120e+00",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.305e-05 max_rel=4.235e+02",
+        "cache_last_time_out: max_abs=6.012e-02 mean_abs=1.973e-03 max_rel=5.312e+02"
+      ],
+      "encoder_output_max_abs": 0.00010118167847394943
+    },
+    {
+      "chunk": 25,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.374e-05 max_rel=4.235e+02",
+        "cache_last_time_out: max_abs=4.827e-02 mean_abs=1.772e-03 max_rel=2.148e+01"
+      ],
+      "encoder_output_max_abs": 7.625855505466461e-05
+    },
+    {
+      "chunk": 26,
+      "errors": [
+        "encoder_output: max_abs=1.080e-04 mean_abs=1.418e-05 max_rel=8.110e+00",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.495e-05 max_rel=4.235e+02",
+        "cache_last_time_out: max_abs=9.070e-02 mean_abs=3.107e-03 max_rel=4.364e+01"
+      ],
+      "encoder_output_max_abs": 0.00010795705020427704
+    },
+    {
+      "chunk": 27,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.578e-05 max_rel=4.235e+02",
+        "cache_last_time_out: max_abs=5.291e-02 mean_abs=2.043e-03 max_rel=2.511e+02"
+      ],
+      "encoder_output_max_abs": 8.377432823181152e-05
+    },
+    {
+      "chunk": 28,
+      "errors": [
+        "encoder_output: max_abs=1.904e-04 mean_abs=2.047e-05 max_rel=1.011e+01",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.694e-05 max_rel=4.235e+02",
+        "cache_last_time_out: max_abs=8.363e-02 mean_abs=2.654e-03 max_rel=8.086e+01"
+      ],
+      "encoder_output_max_abs": 0.00019041448831558228
+    },
+    {
+      "chunk": 29,
+      "errors": [
+        "encoder_output: max_abs=1.274e-04 mean_abs=1.190e-05 max_rel=1.205e+01",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.769e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=4.575e-02 mean_abs=1.980e-03 max_rel=2.226e+02"
+      ],
+      "encoder_output_max_abs": 0.0001274198293685913
+    },
+    {
+      "chunk": 30,
+      "errors": [
+        "encoder_output: max_abs=1.107e-04 mean_abs=1.337e-05 max_rel=8.615e+00",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.839e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=7.889e-02 mean_abs=2.011e-03 max_rel=1.681e+02"
+      ],
+      "encoder_output_max_abs": 0.00011066719889640808
+    },
+    {
+      "chunk": 31,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.903e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=6.976e-02 mean_abs=1.920e-03 max_rel=1.158e+02"
+      ],
+      "encoder_output_max_abs": 8.66129994392395e-05
+    },
+    {
+      "chunk": 32,
+      "errors": [
+        "encoder_output: max_abs=1.347e-04 mean_abs=1.180e-05 max_rel=5.114e+01",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=2.974e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=6.162e-02 mean_abs=1.815e-03 max_rel=8.659e+01"
+      ],
+      "encoder_output_max_abs": 0.00013466551899909973
+    },
+    {
+      "chunk": 33,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.063e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=4.907e-02 mean_abs=1.773e-03 max_rel=3.583e+01"
+      ],
+      "encoder_output_max_abs": 8.455943316221237e-05
+    },
+    {
+      "chunk": 34,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.151e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=6.921e-02 mean_abs=1.821e-03 max_rel=1.145e+02"
+      ],
+      "encoder_output_max_abs": 7.141754031181335e-05
+    },
+    {
+      "chunk": 35,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.223e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=7.322e-02 mean_abs=1.858e-03 max_rel=1.489e+02"
+      ],
+      "encoder_output_max_abs": 5.7501718401908875e-05
+    },
+    {
+      "chunk": 36,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.292e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=5.862e-02 mean_abs=2.023e-03 max_rel=3.453e+02"
+      ],
+      "encoder_output_max_abs": 9.35560092329979e-05
+    },
+    {
+      "chunk": 37,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.361e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=5.257e-02 mean_abs=1.718e-03 max_rel=2.451e+01"
+      ],
+      "encoder_output_max_abs": 9.728968143463135e-05
+    },
+    {
+      "chunk": 38,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.419e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=6.783e-02 mean_abs=1.663e-03 max_rel=4.463e+02"
+      ],
+      "encoder_output_max_abs": 5.960837006568909e-05
+    },
+    {
+      "chunk": 39,
+      "errors": [
+        "encoder_output: max_abs=1.393e-04 mean_abs=1.455e-05 max_rel=1.166e+01",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.546e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=8.947e-02 mean_abs=2.719e-03 max_rel=4.990e+01"
+      ],
+      "encoder_output_max_abs": 0.00013927649706602097
+    },
+    {
+      "chunk": 40,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.613e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=4.088e-02 mean_abs=1.754e-03 max_rel=4.307e+01"
+      ],
+      "encoder_output_max_abs": 7.265247404575348e-05
+    },
+    {
+      "chunk": 41,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.672e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=4.564e-02 mean_abs=1.684e-03 max_rel=2.927e+01"
+      ],
+      "encoder_output_max_abs": 7.552281022071838e-05
+    },
+    {
+      "chunk": 42,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.737e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=6.989e-02 mean_abs=1.830e-03 max_rel=1.259e+02"
+      ],
+      "encoder_output_max_abs": 8.929334580898285e-05
+    },
+    {
+      "chunk": 43,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.804e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=5.335e-02 mean_abs=1.800e-03 max_rel=1.934e+02"
+      ],
+      "encoder_output_max_abs": 7.332116365432739e-05
+    },
+    {
+      "chunk": 44,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.878e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=6.918e-02 mean_abs=1.897e-03 max_rel=5.301e+02"
+      ],
+      "encoder_output_max_abs": 9.690597653388977e-05
+    },
+    {
+      "chunk": 45,
+      "errors": [
+        "encoder_output: max_abs=1.232e-04 mean_abs=1.599e-05 max_rel=3.649e+02",
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=3.968e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=7.835e-02 mean_abs=1.849e-03 max_rel=3.428e+02"
+      ],
+      "encoder_output_max_abs": 0.00012317695654928684
+    },
+    {
+      "chunk": 46,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=4.043e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=8.297e-02 mean_abs=1.816e-03 max_rel=6.464e+01"
+      ],
+      "encoder_output_max_abs": 5.6658871471881866e-05
+    },
+    {
+      "chunk": 47,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=4.126e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=7.671e-02 mean_abs=1.834e-03 max_rel=4.038e+01"
+      ],
+      "encoder_output_max_abs": 5.372241139411926e-05
+    },
+    {
+      "chunk": 48,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=4.207e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=5.105e-02 mean_abs=1.753e-03 max_rel=1.043e+02"
+      ],
+      "encoder_output_max_abs": 4.247110337018967e-05
+    },
+    {
+      "chunk": 49,
+      "errors": [
+        "cache_last_channel_out: max_abs=5.225e-03 mean_abs=4.288e-05 max_rel=4.489e+03",
+        "cache_last_time_out: max_abs=5.963e-02 mean_abs=1.912e-03 max_rel=5.903e+01"
+      ],
+      "encoder_output_max_abs": 6.39893114566803e-05
+    }
+  ]
+}

@@ -1,0 +1,136 @@
+{
+  "mode": "closed_loop",
+  "providers": [
+    "CPUExecutionProvider"
+  ],
+  "onnx": "tools/export_onnx/out/encoder_streaming.onnx",
+  "ref": "artifacts/reference/stream_ref_cache3_50.jsonl",
+  "total_chunks": 50,
+  "passed": 30,
+  "failed": 20,
+  "pass_rate": 60.0,
+  "atol": 0.0001,
+  "rtol": 0.0001,
+  "failures": [
+    {
+      "chunk": 4,
+      "errors": [
+        "cache_last_time_out: max_abs=2.747e-04 mean_abs=5.459e-06 max_rel=1.000e+00"
+      ]
+    },
+    {
+      "chunk": 5,
+      "errors": [
+        "cache_last_time_out: max_abs=1.783e-04 mean_abs=3.995e-06 max_rel=1.000e+00"
+      ]
+    },
+    {
+      "chunk": 8,
+      "errors": [
+        "cache_last_time_out: max_abs=1.812e-04 mean_abs=6.459e-06 max_rel=1.000e+00"
+      ]
+    },
+    {
+      "chunk": 9,
+      "errors": [
+        "cache_last_time_out: max_abs=1.621e-04 mean_abs=5.617e-06 max_rel=1.939e+00"
+      ]
+    },
+    {
+      "chunk": 10,
+      "errors": [
+        "cache_last_time_out: max_abs=1.192e-04 mean_abs=3.854e-06 max_rel=1.319e+00"
+      ]
+    },
+    {
+      "chunk": 11,
+      "errors": [
+        "cache_last_time_out: max_abs=1.507e-04 mean_abs=2.816e-06 max_rel=1.000e+00"
+      ]
+    },
+    {
+      "chunk": 12,
+      "errors": [
+        "cache_last_time_out: max_abs=1.330e-04 mean_abs=4.984e-06 max_rel=1.323e+00"
+      ]
+    },
+    {
+      "chunk": 13,
+      "errors": [
+        "cache_last_time_out: max_abs=1.659e-04 mean_abs=3.189e-06 max_rel=1.454e+00"
+      ]
+    },
+    {
+      "chunk": 20,
+      "errors": [
+        "cache_last_time_out: max_abs=1.240e-04 mean_abs=3.004e-06 max_rel=1.000e+00"
+      ]
+    },
+    {
+      "chunk": 22,
+      "errors": [
+        "cache_last_time_out: max_abs=1.111e-04 mean_abs=3.791e-06 max_rel=4.101e+00"
+      ]
+    },
+    {
+      "chunk": 23,
+      "errors": [
+        "cache_last_time_out: max_abs=1.431e-04 mean_abs=2.863e-06 max_rel=1.796e+00"
+      ]
+    },
+    {
+      "chunk": 25,
+      "errors": [
+        "cache_last_time_out: max_abs=1.469e-04 mean_abs=3.021e-06 max_rel=1.000e+00"
+      ]
+    },
+    {
+      "chunk": 27,
+      "errors": [
+        "cache_last_time_out: max_abs=1.841e-04 mean_abs=3.569e-06 max_rel=1.000e+00"
+      ]
+    },
+    {
+      "chunk": 28,
+      "errors": [
+        "cache_last_time_out: max_abs=3.014e-04 mean_abs=7.345e-06 max_rel=1.406e+00"
+      ]
+    },
+    {
+      "chunk": 29,
+      "errors": [
+        "cache_last_time_out: max_abs=1.330e-04 mean_abs=4.366e-06 max_rel=1.000e+00"
+      ]
+    },
+    {
+      "chunk": 31,
+      "errors": [
+        "cache_last_time_out: max_abs=1.049e-04 mean_abs=3.000e-06 max_rel=1.000e+00"
+      ]
+    },
+    {
+      "chunk": 33,
+      "errors": [
+        "cache_last_time_out: max_abs=1.144e-04 mean_abs=2.627e-06 max_rel=1.270e+00"
+      ]
+    },
+    {
+      "chunk": 44,
+      "errors": [
+        "cache_last_time_out: max_abs=1.030e-04 mean_abs=2.668e-06 max_rel=1.402e+00"
+      ]
+    },
+    {
+      "chunk": 45,
+      "errors": [
+        "cache_last_time_out: max_abs=1.116e-04 mean_abs=2.539e-06 max_rel=1.000e+00"
+      ]
+    },
+    {
+      "chunk": 48,
+      "errors": [
+        "cache_last_time_out: max_abs=1.111e-04 mean_abs=2.431e-06 max_rel=1.000e+00"
+      ]
+    }
+  ]
+}

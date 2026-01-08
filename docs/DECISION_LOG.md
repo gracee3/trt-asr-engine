@@ -67,3 +67,8 @@
   Alternatives: keep model-default streaming config (`cache_drop_size=71`, `valid_out_len=2`) which yields `cache_len_out<=0` for 48‑frame chunks.
   Evidence: `tools/verify_nemo/streaming_encoder_cache.py --chunk-size 48 --cache-drop-size 3` yields `cache_len_out=1` on chunk 0; ORT cache sensitivity shows positive cache_len_out; ORT closed-loop parity passes for 4 chunks with cache_len_out monotonic.
   Validation: re-export `encoder_streaming.onnx` with overrides, run `tools/onnxruntime/onnx_streaming_parity.py` closed-loop parity (PASS), and confirm non-negative cache_len_out across chunks.
+
+- Decision: Expand streaming encoder TRT `audio_signal.T` profile to include `57` (chunk_size 48 + pre_encode 9), and update contract `audio_signal.T` typical values to `[41,57]`.
+  Alternatives: keep `T=48` profiles or disable pre-encode (would diverge from `streaming_cfg` behavior).
+  Evidence: `artifacts/reference/stream_ref_cache3_50.jsonl` metadata shows `chunk_len=57` for chunks ≥1 (`slice_end - slice_start = 48 + 9`); TRT parity with `T=41/48` profiles fails shape checks for `T=57`.
+  Validation: rebuild TRT encoder with `T=41/57` profiles and re-run closed-loop parity against the cache3 reference.

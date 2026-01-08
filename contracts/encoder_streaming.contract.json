@@ -20,8 +20,8 @@
       "description": "Mel-filterbank features",
       "constraints": {
         "T": {
-          "typical_values": [41, 48],
-          "description": "Feature frames per chunk (typically 41 for first chunk, 48 for subsequent)"
+          "typical_values": [41, 57],
+          "description": "Feature frames per slice (41 for first chunk, 48+pre_encode(9)=57 for subsequent)"
         },
         "B": {
           "typical_values": [1],
@@ -124,18 +124,18 @@
       }
     },
     {
-      "name": "streaming_profile_48",
-      "description": "Optimized for subsequent chunks (T=48)",
+      "name": "streaming_profile_57",
+      "description": "Optimized for subsequent chunks (T=57 incl. pre-encode)",
       "dimensions": {
-        "audio_signal.T": {"min": 48, "opt": 48, "max": 48},
+        "audio_signal.T": {"min": 57, "opt": 57, "max": 57},
         "B": {"min": 1, "opt": 1, "max": 1}
       }
     },
     {
       "name": "unified_profile",
-      "description": "Unified profile supporting both chunk sizes",
+      "description": "Unified profile supporting both slice sizes",
       "dimensions": {
-        "audio_signal.T": {"min": 41, "opt": 48, "max": 48},
+        "audio_signal.T": {"min": 41, "opt": 57, "max": 57},
         "B": {"min": 1, "opt": 1, "max": 8}
       }
     }
@@ -169,7 +169,7 @@
   },
   "validation": {
     "parity_test": "tools/onnxruntime/onnx_streaming_parity.py",
-    "reference_jsonl": "artifacts/reference/pytorch_reference_50.jsonl",
+    "reference_jsonl": "artifacts/reference/stream_ref_cache3_50.jsonl",
     "tolerance": {
       "atol": 1e-4,
       "rtol": 1e-4

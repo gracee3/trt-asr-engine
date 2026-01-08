@@ -74,6 +74,7 @@ This document maps every contract field to a source of truth (paper, NeMo config
 - Cache input/output shapes: `tools/export_onnx/out/encoder_streaming.onnx` IO summary (batch-first cache layout).
 - `valid_out_len=3`: `encoder.streaming_cfg.valid_out_len` after `setup_streaming_params` with overrides `chunk_size=48` and `cache_drop_size=3` (see `tools/verify_nemo/streaming_encoder_cache.py` logs from 2026-01-08).
 - Streaming chunk params (`chunk_size=[41,48]`, `shift_size=[17,24]`, `cache_drop_size=3`, `pre_encode_cache_size=[0,9]`, `drop_extra_pre_encoded=2`): `encoder.streaming_cfg` after `setup_streaming_params` with overrides (see `tools/verify_nemo/streaming_encoder_cache.py` logs from 2026-01-08).
+- `audio_signal.T` slice lengths (`41` for chunk0, `57` for subsequent): streaming schedule uses `slice_end - slice_start`, so `chunk_size=48` plus `pre_encode_cache_size=9` → 57 (see `artifacts/reference/stream_ref_cache3_50.jsonl` metadata).
 - `cache_drop_size` override (72 → 3): clamped/overridden to avoid negative cache_len for 48‑frame chunks and to enable stateful cache growth (see `tools/verify_nemo/streaming_encoder_cache.py` logs and ORT cache sensitivity test `tools/onnxruntime/ort_cache_sensitivity.py`).
 - `chunk_size_units`/`shift_size_units`: `setup_streaming_params` uses feature-frame counts (pre-encoder). `valid_out_len_units`: encoder steps post-subsampling.
 - Cache semantics + need for context-limited caching: `docs/txt/2312.17279v3.txt` (page 4/8).

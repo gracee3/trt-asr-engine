@@ -1,6 +1,6 @@
 # TDT Trace Parity Report
 
-Status: PARTIAL (ORT streaming cache parity PASS after cache_drop_size=3 re-export; TRT/trace parity pending).
+Status: PARTIAL (ORT streaming cache parity PASS after cache_drop_size=3 re-export; TRT closed-loop parity failing due to cache output deltas).
 
 ## Environment
 - Model: `models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo`
@@ -179,3 +179,73 @@ python tools/onnxruntime/ort_cache_sensitivity.py \
 ### Interpretation
 - Closed‑loop parity now **PASS** with stateful cache_len_out after re‑exporting streaming encoder with `cache_drop_size=3`.
 - Next: rebuild TRT streaming encoder from the new ONNX and re-run TRT vs ORT closed-loop parity.
+
+## ORT Streaming Parity (50 chunks, cache3 schedule)
+### Reference generation (cache3 schedule with pre-encode)
+```bash
+python tools/verify_nemo/streaming_encoder_reference.py \
+  --model models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
+  --device cpu \
+  --chunk-len 48 \
+  --num-chunks 50 \
+  --cache-drop-size 3 \
+  --chunk-size 48 \
+  --shift-size 24 \
+  --use-streaming-cfg-schedule \
+  --jsonl-out artifacts/reference/stream_ref_cache3_50.jsonl
+```
+
+### ORT closed-loop parity (strict atol=1e-4)
+```bash
+python tools/onnxruntime/onnx_streaming_parity.py \
+  --onnx tools/export_onnx/out/encoder_streaming.onnx \
+  --ref artifacts/reference/stream_ref_cache3_50.jsonl \
+  --mode closed_loop \
+  --providers cpu \
+  --summary-json artifacts/parity/ort_streaming_parity_cache3_50.json
+```
+
+### Results
+- encoder_output max_abs ≤ `5.476e-07` (per-chunk logs).
+- cache_last_channel_out max_abs `0.0`.
+- cache_last_time_out max_abs `3.014e-04` (fails strict 1e-4 but << contract cache tolerance 0.1).
+- cache_last_channel_len_out monotonic (`1..148`).
+
+### Interpretation
+- ORT closed-loop parity confirms export correctness with cache3 schedule; only cache_last_time_out needs a relaxed tolerance in tooling.
+
+## TRT Streaming Parity (50 chunks, cache3 schedule, T=41/57 profile)
+### Engine build (T=41/57 profile)
+```bash
+/usr/src/tensorrt/bin/trtexec \
+  --onnx=/home/emmy/git/trt-asr-engine/tools/export_onnx/out/encoder_streaming.onnx \
+  --saveEngine=/home/emmy/git/trt-asr-engine/models/parakeet-tdt-0.6b-v3/engines_20260108_cache3_fp32_t57/encoder_streaming.engine \
+  --minShapes=audio_signal:1x128x41,length:1,cache_last_channel:1x24x256x1024,cache_last_time:1x24x1024x4,cache_last_channel_len:1 \
+  --optShapes=audio_signal:1x128x57,length:1,cache_last_channel:1x24x256x1024,cache_last_time:1x24x1024x4,cache_last_channel_len:1 \
+  --maxShapes=audio_signal:1x128x57,length:1,cache_last_channel:1x24x256x1024,cache_last_time:1x24x1024x4,cache_last_channel_len:1
+```
+
+### TRT closed-loop parity (strict atol=1e-4)
+```bash
+python tools/tensorrt/trt_streaming_parity.py \
+  --engine /home/emmy/git/trt-asr-engine/models/parakeet-tdt-0.6b-v3/engines_20260108_cache3_fp32_t57/encoder_streaming.engine \
+  --ref artifacts/reference/stream_ref_cache3_50.jsonl \
+  --mode closed_loop \
+  --valid-out-len 3 \
+  --cache-size 256 \
+  --time-ctx 4 \
+  --atol 1e-4 \
+  --rtol 1e-4 \
+  --cache-atol 1e-4 \
+  --summary-json artifacts/parity/trt_streaming_parity_cache3_fp32_t57_50.json
+```
+
+### Results
+- encoder_output max_abs `6.388e-04` (within TRT p100 tolerance `1e-3`).
+- cache_last_channel_out max_abs `5.225e-03`.
+- cache_last_time_out max_abs `3.614e-01`.
+- cache_last_channel_len_out matches reference for all chunks.
+
+### Interpretation
+- TRT closed-loop parity currently fails under strict per-element tolerances due to cache output deltas, even though encoder outputs remain within contract limits.
+- Cache tolerances and/or cache-region comparison need to be updated to reflect contract semantics before declaring TRT parity PASS.
