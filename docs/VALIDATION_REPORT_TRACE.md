@@ -289,3 +289,94 @@ python tools/tensorrt/trt_streaming_parity.py \
 ### Interpretation
 - Disabling TF32 removes cache_last_time_out outliers while keeping encoder_output well within the `1e-3` TRT tolerance.
 - Keep `--noTF32` for the FP32 streaming encoder build when cache-time parity is required.
+
+## Runtime Trace (1 utterance, TRT streaming encoder = noTF32)
+### Trimmed WAV (avoid tail chunks < min profile)
+```bash
+python - <<'PY'
+import csv
+from pathlib import Path
+import wave
+
+repo = Path('/home/emmy/git/trt-asr-engine')
+manifest_in = repo / 'eval' / 'manifests' / 'librispeech_dev_gate.tsv'
+manifest_out = repo / 'artifacts' / 'trace' / 'librispeech_dev_gate_trimmed10.tsv'
+out_dir = repo / 'artifacts' / 'trace' / 'trimmed_wav'
+out_dir.mkdir(parents=True, exist_ok=True)
+
+samples_per_chunk = int(0.5 * 16000)
+rows = []
+with manifest_in.open('r', encoding='utf-8') as f:
+    reader = csv.reader(f, delimiter='\t')
+    next(reader)
+    for row in reader:
+        if len(rows) >= 10:
+            break
+        utt_id, wav_path, ref_text = row[0], row[1], row[2]
+        wav_abs = (repo / wav_path).resolve()
+        with wave.open(str(wav_abs), 'rb') as w:
+            sr = w.getframerate()
+            ch = w.getnchannels()
+            sampwidth = w.getsampwidth()
+            n_frames = w.getnframes()
+            n_chunks = n_frames // samples_per_chunk
+            n_frames_trim = max(1, n_chunks) * samples_per_chunk
+            frames = w.readframes(n_frames_trim)
+        out_path = out_dir / f"{utt_id}.wav"
+        with wave.open(str(out_path), 'wb') as w_out:
+            w_out.setnchannels(ch)
+            w_out.setsampwidth(sampwidth)
+            w_out.setframerate(sr)
+            w_out.writeframes(frames)
+        rows.append((utt_id, str(out_path), ref_text))
+
+manifest_out.parent.mkdir(parents=True, exist_ok=True)
+with manifest_out.open('w', encoding='utf-8', newline='') as f:
+    writer = csv.writer(f, delimiter='\t')
+    writer.writerow(['utt_id', 'wav_path', 'ref_text'])
+    writer.writerows(rows)
+PY
+```
+
+### TRT trace run (debug steps capped)
+```bash
+if [ -f .cursor/debug.log ]; then
+  mv .cursor/debug.log artifacts/trace/debug_prev_$(date +%Y%m%d_%H%M%S).jsonl
+fi
+LD_LIBRARY_PATH=/home/emmy/git/trt-asr-engine/cpp/build \
+PARAKEET_DEBUG_TDT_STEPS=80 \
+PARAKEET_DISABLE_PUNCT_SUPPRESSION=1 \
+PARAKEET_FEATURE_NORM=per_feature \
+rust/target/debug/cli \
+  --model-dir models/parakeet-tdt-0.6b-v3/engines_20260107_fp32 \
+  --stream-sim 0.5 \
+  artifacts/trace/trimmed_wav/dev-clean_1272-128104-0000.wav \
+  > artifacts/logs/tdt_1utt_trt_fp32_noTF32.log \
+  2> artifacts/logs/tdt_1utt_trt_fp32_noTF32.err
+
+cp .cursor/debug.log artifacts/trace/tdt_1utt_trt_fp32_noTF32.jsonl
+```
+
+### Notes
+- The debug run uses `PARAKEET_DEBUG_TDT_STEPS=80`, so stdout may show only partials while the per-step NDJSON trace is captured in `artifacts/trace/tdt_1utt_trt_fp32_noTF32.jsonl`.
+- The encoder engine used is the noTF32 build via `models/parakeet-tdt-0.6b-v3/engines_20260107_fp32/encoder.engine` symlink.
+
+## Runtime Sanity (10 utterances, trimmed manifest)
+```bash
+LD_LIBRARY_PATH=/home/emmy/git/trt-asr-engine/cpp/build \
+PARAKEET_FEATURE_NORM=per_feature \
+PARAKEET_DISABLE_PUNCT_SUPPRESSION=1 \
+PARAKEET_STREAMING_ENCODER_PATH=/home/emmy/git/trt-asr-engine/models/parakeet-tdt-0.6b-v3/engines_20260108_cache3_fp32_t57_noTF32/encoder_streaming.engine \
+python tools/stt_suite/run_suite.py \
+  --manifest artifacts/trace/librispeech_dev_gate_trimmed10.tsv \
+  --cli-path rust/target/debug/cli \
+  --model-dir models/parakeet-tdt-0.6b-v3/engines_20260107_fp32 \
+  --num-utterances 10 \
+  --variants base \
+  --rounds 1 \
+  --output-dir artifacts/logs/tdt_10utt_fp32_noTF32_run2
+```
+
+### Results
+- PASS `10/10` (0 empty, 0 fail, 0 NaNs).
+- Output summary: `artifacts/logs/tdt_10utt_fp32_noTF32_run2/all_results.json`.

@@ -24,8 +24,10 @@ apps/trt_runtime_smoke/build_real/
 
 out/
 
-# Artifacts - track parity/diagnostics/stability, ignore large reference data
+# Artifacts - track parity/diagnostics/stability, ignore large/ephemeral data
 artifacts/reference/
+artifacts/logs/
+artifacts/trace/
 
 .cargo-target-magnolia/
 .cursor
