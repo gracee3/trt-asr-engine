@@ -54,6 +54,13 @@ The streaming encoder uses **true stateful cache carryover** (not chunk-isolated
 
 See `contracts/parakeet-tdt-0.6b-v3.contract.json` for the canonical runtime contract.
 
+### Current streaming status (reset phase)
+
+- **Stateful cache schedule (cache3)**: `cache_drop_size=3`, `valid_out_len=3`, `chunk_size=[41,48]`, `shift_size=[17,24]` (batch-first caches).
+- **ORT closed-loop parity**: PASS on cache3 schedule; TRT closed-loop parity passes when FP32 streaming encoder is built with **TF32 disabled**.
+- **FP32 TRT requirement**: build streaming encoder with `trtexec --noTF32` (see `docs/VALIDATION_REPORT_TRACE.md` and `docs/DECISION_LOG.md`).
+- **Min chunk constraint**: TRT streaming encoder profile currently requires `audio_signal.T >= 41`; tail-chunk policy (pad vs drop vs smaller profile) is an open decision.
+
 ### Timebase
 
 - **Feature frame shift**: 10ms (hop length 160 @ 16kHz)

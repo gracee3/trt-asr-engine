@@ -1,5 +1,8 @@
 # ORT Validation Report
 
+> NOTE: This report reflects an earlier cache_len=0 era and is superseded by the cache3 closed-loop passes.
+> See `docs/VALIDATION_REPORT_TRACE.md` and `artifacts/parity/ort_streaming_parity_cache3_50.json`.
+
 Status: PARTIAL (streaming encoder parity; cache_last_time_out mismatch outstanding).
 
 ## Environment

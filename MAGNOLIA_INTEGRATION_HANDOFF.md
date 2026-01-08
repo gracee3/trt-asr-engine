@@ -1,5 +1,9 @@
 # Magnolia Integration Handoff: TRT Streaming ASR
 
+> LEGACY (pre-reset): This handoff assumes chunk-isolated streaming (`cache_len=0`) and older engine paths.
+> Current stateful cache3 streaming uses TF32-disabled FP32 encoder builds; see `docs/VALIDATION_REPORT_TRACE.md`
+> and `contracts/parakeet-tdt-0.6b-v3.contract.json` before integrating.
+
 **Purpose:** Handoff for wiring TRT engines into Magnolia live captioning pipeline
 **Prerequisite:** TRT integration complete (see [AGENT_SETUP_GUIDE.md](AGENT_SETUP_GUIDE.md))
 **Last Updated:** 2026-01-03
