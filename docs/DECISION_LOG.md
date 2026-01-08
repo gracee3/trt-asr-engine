@@ -72,3 +72,8 @@
   Alternatives: keep `T=48` profiles or disable pre-encode (would diverge from `streaming_cfg` behavior).
   Evidence: `artifacts/reference/stream_ref_cache3_50.jsonl` metadata shows `chunk_len=57` for chunks ≥1 (`slice_end - slice_start = 48 + 9`); TRT parity with `T=41/48` profiles fails shape checks for `T=57`.
   Validation: rebuild TRT encoder with `T=41/57` profiles and re-run closed-loop parity against the cache3 reference.
+
+- Decision: Disable TF32 for FP32 streaming encoder TRT builds to eliminate cache_last_time_out parity outliers.
+  Alternatives: keep TF32 enabled and relax cache_time tolerances.
+  Evidence: TF32-enabled TRT parity shows 5/50 cache_last_time_out failures (max_abs `3.614e-01`); `--noTF32` build passes 50/50 with cache_time max_abs ≤ `1.416e-04` and encoder_output max_abs `1.974e-07`.
+  Validation: `artifacts/parity/trt_streaming_parity_cache3_fp32_t57_noTF32_50.json` reports `failed=0`.

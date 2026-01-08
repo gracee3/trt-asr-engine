@@ -562,6 +562,11 @@ def main():
             else:
                 print(f"[chunk {i}] PASS: {msg}")
 
+        if chunk_failures and any("cache_last_time_out" in msg for msg in chunk_failures):
+            diff_tm = np.abs(got_cache_tm - ref_cache_tm)
+            per_k = np.max(diff_tm, axis=(0, 1, 2)).tolist()
+            print(f"[chunk {i}] cache_last_time_out per_k_max_abs={per_k} time_valid_len={time_valid_len}")
+
         # Record stats for stability analysis
         chunk_stats.append({
             "chunk": i,

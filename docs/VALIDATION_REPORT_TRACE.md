@@ -1,6 +1,6 @@
 # TDT Trace Parity Report
 
-Status: PARTIAL (ORT streaming cache parity PASS after cache_drop_size=3 re-export; TRT closed-loop parity failing due to cache output deltas).
+Status: PASS (ORT closed-loop parity PASS; TRT closed-loop parity PASS after disabling TF32 for the streaming encoder).
 
 ## Environment
 - Model: `models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo`
@@ -247,6 +247,45 @@ python tools/tensorrt/trt_streaming_parity.py \
 - cache_last_channel_out compared on valid region only; max_abs `5.225e-03` (passes with cache_channel_atol=1e-2 default).
 - cache_last_time_out max_abs `3.614e-01` (5 chunks exceed cache_atol=0.1).
 - cache_last_channel_len_out matches reference for all chunks.
+- Per‑k cache_time diffs for failing chunks show spikes in `k=0..2` with `k=3` at 0 (e.g., chunk 4: `[0.3614, 0.1785, 0.1270, 0.0]`), so this is **valid‑region drift**, not padding leakage.
 
 ### Interpretation
 - TRT closed-loop parity is now dominated by cache_last_time_out outliers (5 chunks). Next decision: either relax TRT cache_time tolerance or rebuild with TF32 disabled to see if the outliers shrink.
+
+## TRT Streaming Parity (50 chunks, cache3 schedule, TF32 disabled)
+### Engine build (noTF32)
+```bash
+/usr/src/tensorrt/bin/trtexec \
+  --onnx=/home/emmy/git/trt-asr-engine/tools/export_onnx/out/encoder_streaming.onnx \
+  --saveEngine=/home/emmy/git/trt-asr-engine/models/parakeet-tdt-0.6b-v3/engines_20260108_cache3_fp32_t57_noTF32/encoder_streaming.engine \
+  --noTF32 \
+  --minShapes=audio_signal:1x128x41,length:1,cache_last_channel:1x24x256x1024,cache_last_time:1x24x1024x4,cache_last_channel_len:1 \
+  --optShapes=audio_signal:1x128x57,length:1,cache_last_channel:1x24x256x1024,cache_last_time:1x24x1024x4,cache_last_channel_len:1 \
+  --maxShapes=audio_signal:1x128x57,length:1,cache_last_channel:1x24x256x1024,cache_last_time:1x24x1024x4,cache_last_channel_len:1
+```
+
+### TRT closed-loop parity (noTF32)
+```bash
+python tools/tensorrt/trt_streaming_parity.py \
+  --engine /home/emmy/git/trt-asr-engine/models/parakeet-tdt-0.6b-v3/engines_20260108_cache3_fp32_t57_noTF32/encoder_streaming.engine \
+  --ref artifacts/reference/stream_ref_cache3_50.jsonl \
+  --mode closed_loop \
+  --valid-out-len 3 \
+  --cache-size 256 \
+  --time-ctx 4 \
+  --atol 1e-3 \
+  --rtol 1e-4 \
+  --cache-channel-atol 1e-2 \
+  --cache-atol 1e-1 \
+  --summary-json artifacts/parity/trt_streaming_parity_cache3_fp32_t57_noTF32_50.json
+```
+
+### Results
+- PASS `50/50`.
+- encoder_output max_abs `1.974e-07` (summary JSON).
+- cache_last_time_out max_abs ≤ `1.416e-04` (per-chunk logs).
+- cache_last_channel_len_out matches reference for all chunks.
+
+### Interpretation
+- Disabling TF32 removes cache_last_time_out outliers while keeping encoder_output well within the `1e-3` TRT tolerance.
+- Keep `--noTF32` for the FP32 streaming encoder build when cache-time parity is required.
