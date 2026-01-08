@@ -698,6 +698,12 @@ static void write_text_file(const std::string& path, const std::string& text) {
   f << text;
 }
 
+static void write_bin_file(const std::string& path, const void* data, size_t bytes) {
+  std::ofstream f(path, std::ios::out | std::ios::binary);
+  if (!f) return;
+  f.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(bytes));
+}
+
 static void cuda_check(cudaError_t e, const char* what);
 static float fp16_to_f32(uint16_t u);
 
@@ -1565,6 +1571,8 @@ struct ParakeetSession {
   bool cache_batch_first = false;
   bool cache_ch_out_empty = false;
   bool cache_tm_out_empty = false;
+  bool cache_len_dump_done = false;
+  bool cache_len_fallback_logged = false;
   int cache_out_state = -1;  // -1 unknown, 0 zero, 1 nonzero
   int64_t cache_len_in = 0;
   int64_t cache_len_capacity = 0;
@@ -1870,6 +1878,8 @@ void parakeet_reset_utterance(ParakeetSession* session) {
   session->cache_tm_out_ptr = nullptr;
   session->cache_ch_out_empty = false;
   session->cache_tm_out_empty = false;
+  session->cache_len_dump_done = false;
+  session->cache_len_fallback_logged = false;
 
   // Prime predictor with NeMo-style prompt tokens once per utterance.
   // This seeds h/c and initializes y_id so decoding can continue across push_features calls.
@@ -2545,25 +2555,92 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
       }
       const auto cache_len_out_shape = session->enc.ctx->getTensorShape(cache_len_out_name);
       const size_t cache_len_out_bytes = volume(cache_len_out_shape) * dtype_size(cache_len_dt);
+      bool cache_len_out_valid = true;
+      int64_t cache_len_out_raw = -1;
+      int32_t cache_len_out_i32 = 0;
+      int64_t cache_len_out_i64 = 0;
+      float cache_len_out_f32 = 0.0f;
+      std::vector<uint8_t> cache_len_raw_bytes;
       if (cache_len_out_bytes == 0) {
-        throw std::runtime_error("cache_last_channel_len_out has zero-sized shape (shape=" +
-                                 dims_to_string(cache_len_out_shape) + ")");
-      }
-      int64_t cache_len_out_val = -1;
-      if (cache_len_dt == nvinfer1::DataType::kINT64) {
-        session->host_cache_len_out = -1;
-        debug_memcpy_async(&session->host_cache_len_out, session->d_cache_last_channel_len_out, sizeof(session->host_cache_len_out),
-                           cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out", &session->debug);
+        cache_len_out_valid = false;
       } else {
-        session->host_cache_len_out32 = -1;
-        debug_memcpy_async(&session->host_cache_len_out32, session->d_cache_last_channel_len_out, sizeof(session->host_cache_len_out32),
-                           cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out", &session->debug);
+        cache_len_raw_bytes.resize(cache_len_out_bytes);
+        debug_memcpy_async(cache_len_raw_bytes.data(), session->d_cache_last_channel_len_out, cache_len_out_bytes,
+                           cudaMemcpyDeviceToHost, session->stream, "enc:cache_len_out_raw", &session->debug);
+        cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(cache_len_out)");
+        if (cache_len_out_bytes >= sizeof(int32_t)) {
+          std::memcpy(&cache_len_out_i32, cache_len_raw_bytes.data(), sizeof(int32_t));
+          std::memcpy(&cache_len_out_f32, cache_len_raw_bytes.data(), sizeof(float));
+        }
+        if (cache_len_out_bytes >= sizeof(int64_t)) {
+          std::memcpy(&cache_len_out_i64, cache_len_raw_bytes.data(), sizeof(int64_t));
+        } else {
+          cache_len_out_i64 = static_cast<int64_t>(cache_len_out_i32);
+        }
+        if (cache_len_dt == nvinfer1::DataType::kINT64) {
+          cache_len_out_raw = cache_len_out_i64;
+        } else {
+          cache_len_out_raw = static_cast<int64_t>(cache_len_out_i32);
+        }
       }
-      cuda_check(cudaStreamSynchronize(session->stream), "cudaStreamSynchronize(cache_len_out)");
-      if (cache_len_dt == nvinfer1::DataType::kINT64) {
-        cache_len_out_val = session->host_cache_len_out;
-      } else if (cache_len_dt == nvinfer1::DataType::kINT32) {
-        cache_len_out_val = static_cast<int64_t>(session->host_cache_len_out32);
+      session->host_cache_len_out = cache_len_out_raw;
+      session->host_cache_len_out32 = static_cast<int32_t>(cache_len_out_raw);
+
+      int64_t cache_len_out_val = cache_len_out_raw;
+      bool cache_len_out_fallback = false;
+      if (cache_len_out_raw < -1) {
+        cache_len_out_valid = false;
+      }
+      if (session->cache_len_capacity > 0 && cache_len_out_raw > session->cache_len_capacity) {
+        cache_len_out_valid = false;
+      }
+      if (!cache_len_out_valid) {
+        int64_t fallback = session->cache_len_in + static_cast<int64_t>(T_enc);
+        if (session->cache_len_capacity > 0 && fallback > session->cache_len_capacity) {
+          fallback = session->cache_len_capacity;
+        }
+        cache_len_out_val = fallback;
+        cache_len_out_fallback = true;
+        if (!session->cache_len_fallback_logged) {
+          std::cerr << "[parakeet_trt] WARN: cache_len_out invalid raw=" << cache_len_out_raw
+                    << " bytes=" << cache_len_out_bytes
+                    << " using_fallback=" << cache_len_out_val << "\n";
+          session->cache_len_fallback_logged = true;
+        }
+      }
+
+      const char* snapshot_dir = std::getenv("PARAKEET_TDT_SNAPSHOT_DIR");
+      if (snapshot_dir && *snapshot_dir && !session->cache_len_dump_done) {
+        try {
+          std::filesystem::create_directories(snapshot_dir);
+          const std::string base(snapshot_dir);
+          const std::string raw_path = base + "/cache_last_channel_len_out_trt.bin";
+          const std::string meta_path = base + "/cache_last_channel_len_out_trt.json";
+          if (!cache_len_raw_bytes.empty()) {
+            write_bin_file(raw_path, cache_len_raw_bytes.data(), cache_len_raw_bytes.size());
+          }
+          std::ostringstream meta;
+          meta << "{"
+               << "\"dtype\":\"" << dtype_name(cache_len_dt) << "\","
+               << "\"shape\":\"" << dims_to_string(cache_len_out_shape) << "\","
+               << "\"bytes\":" << cache_len_out_bytes << ","
+               << "\"raw_i32\":" << cache_len_out_i32 << ","
+               << "\"raw_i64\":" << cache_len_out_i64 << ","
+               << "\"raw_f32\":";
+          if (std::isfinite(cache_len_out_f32)) {
+            meta << cache_len_out_f32;
+          } else {
+            meta << "\"nan\"";
+          }
+          meta << ","
+               << "\"raw\":" << cache_len_out_raw << ","
+               << "\"effective\":" << cache_len_out_val
+               << "}";
+          write_text_file(meta_path, meta.str());
+        } catch (...) {
+          std::cerr << "[parakeet_trt] WARN: failed to write cache_len_out snapshot\n";
+        }
+        session->cache_len_dump_done = true;
       }
       if (!session->cache_len_logged) {
         const int cache_len_out_idx = io_tensor_index(session->enc, cache_len_out_name);
@@ -2572,6 +2649,7 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
                   << " dtype=" << dtype_name(cache_len_dt)
                   << " dims=" << dims_to_string(cache_len_out_shape)
                   << " bytes=" << cache_len_out_bytes
+                  << " raw=" << cache_len_out_raw
                   << " value=" << cache_len_out_val << "\n";
         session->cache_len_logged = true;
       }
@@ -2626,8 +2704,12 @@ int parakeet_push_features(ParakeetSession* session, const float* features_bct_f
             }
           }
         } else if (cache_len_out_val > 0) {
-          if (session->cache_out_state <= 0) {
+          if (session->cache_out_state <= 0 && !cache_len_out_fallback) {
             throw std::runtime_error("Streaming contract violated: cache_len_out>0 but cache_out is zero");
+          }
+          if (session->cache_out_state <= 0 && cache_len_out_fallback && !session->cache_enable_logged) {
+            std::cerr << "[parakeet_trt] WARN: cache_out zero but cache_len_out fallback enabled; proceeding\n";
+            session->cache_enable_logged = true;
           }
           session->cache_enabled = true;
         } else {

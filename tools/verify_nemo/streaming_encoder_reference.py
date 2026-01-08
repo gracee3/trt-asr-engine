@@ -633,9 +633,16 @@ def main():
                 cache_last_time_out = pad_or_trunc_tensor(post_out[3], axis=3, target=args.time_ctx)
                 cache_last_channel_len_out = post_out[4]
 
-                cache_len_val = int(cache_last_channel_len_out.item())
+                cache_len_raw = int(cache_last_channel_len_out.item())
+                cache_len_val = cache_len_raw
                 if cache_len_val < 0:
-                    raise RuntimeError(f"cache_last_channel_len_out went negative: {cache_len_val}")
+                    cache_len_in_val = int(cache_state[2].item()) if torch.is_tensor(cache_state[2]) else int(cache_state[2])
+                    enc_len_val = int(encoded_lengths.item())
+                    cache_len_val = min(cache_len_in_val + enc_len_val, args.cache_size)
+                    cache_last_channel_len_out = torch.tensor([cache_len_val], dtype=cache_last_channel_len_out.dtype,
+                                                              device=cache_last_channel_len_out.device)
+                    print(f"WARN: cache_last_channel_len_out negative ({cache_len_raw}); "
+                          f"using fallback={cache_len_val} (cache_len_in={cache_len_in_val} + T_enc={enc_len_val})")
 
                 outputs = {
                     "encoder_output": encode_tensor(encoder_output),
@@ -651,6 +658,7 @@ def main():
                     "encoder_output_shape": list(encoder_output.shape),
                     "encoded_lengths_value": int(encoded_lengths.item()),
                     "cache_len_out_value": cache_len_val,
+                    "cache_len_out_raw_value": cache_len_raw,
                     "timing_ms": {
                         "step": step_ms,
                         "postprocess": post_ms,

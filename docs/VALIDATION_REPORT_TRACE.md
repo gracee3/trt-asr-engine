@@ -106,9 +106,8 @@ between TRT encoder/joint outputs vs PyTorch (argmax flip on a close duration pa
 ```bash
 LD_LIBRARY_PATH=/home/emmy/git/trt-asr-engine/cpp/build \
 PARAKEET_STREAMING_ENCODER_PATH=/home/emmy/git/trt-asr-engine/models/parakeet-tdt-0.6b-v3/engines_20260107_fp32/encoder_streaming.engine \
-PARAKEET_DISABLE_CACHE=1 \
 PARAKEET_DEBUG_TDT_STEPS=1 \
-PARAKEET_TDT_SNAPSHOT_DIR=/tmp/tdt_snapshot_trt_stream7 \
+PARAKEET_TDT_SNAPSHOT_DIR=/tmp/tdt_snapshot_trt_stream10 \
 rust/target/debug/cli \
   --model-dir /home/emmy/git/trt-asr-engine/models/parakeet-tdt-0.6b-v3/engines_20260107_fp32 \
   --stream-sim 0.5 \
@@ -120,15 +119,49 @@ rust/target/debug/cli \
 ### Compare ORT encoder vs TRT encoder (step‑0)
 ```bash
 python tools/onnxruntime/compare_encoder_step0.py \
-  --trt-dir /tmp/tdt_snapshot_trt_stream7
+  --trt-dir /tmp/tdt_snapshot_trt_stream10
 ```
 
 ### Results
 - `enc_out_t0` parity: `max_abs=3.1e-05`, `mean_abs=5.0e-06`, `p99_abs=1.9e-05`
 - Cache inputs at t=0 are zero (`cache_in max_abs: channel=0.0 time=0.0`)
+- `cache_last_channel_len_out`:
+  - ORT: `-67` (raw output)
+  - TRT: raw `-67`, fallback `2`
 - `encoder_output` shapes: ORT `[1,1024,2]` vs TRT joint slice `[1,1024,16]` (full‑tensor parity skipped due to shape mismatch)
+- Cache outputs remain zero (`cache_out max_abs cache_last_channel_out=0 cache_last_time_out=0`), so cache propagation currently advances only via fallback length (no nonzero cache state).
 
 ### Interpretation
 - **TRT streaming encoder matches ORT streaming encoder** on step‑0 given identical inputs and zero caches.
 - Remaining mismatch with PyTorch trace is **not** a TRT encoder bug; the PyTorch trace is still using offline encoder semantics.
-- `cache_last_channel_len_out` returns `-67` with the streaming engine; cache propagation must remain disabled (`PARAKEET_DISABLE_CACHE=1`) until cache‑len semantics are corrected.
+- `cache_last_channel_len_out=-67` is coming from the ONNX export (ORT matches TRT), so cache‑len semantics must be corrected at the export/model level. Runtime now applies a fallback (`cache_len_in + T_enc`) to unblock multi‑chunk runs.
+
+## ORT Streaming Parity (4 chunks, closed‑loop)
+### Reference generation (PyTorch streaming + fallback cache_len)
+```bash
+python tools/verify_nemo/streaming_encoder_reference.py \
+  --model models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
+  --device cpu \
+  --chunk-len 48 \
+  --num-chunks 4 \
+  --jsonl-out /tmp/stream_ref.jsonl
+```
+
+### ORT closed‑loop parity
+```bash
+python tools/onnxruntime/onnx_streaming_parity.py \
+  --onnx tools/export_onnx/out/encoder_streaming.onnx \
+  --ref /tmp/stream_ref.jsonl \
+  --mode closed_loop \
+  --providers cpu \
+  --max-chunks 4 \
+  --summary-json /tmp/ort_streaming_parity.json
+```
+
+### Results
+- Chunk 0: encoder_output matches; cache_len_out mismatch (`ORT=-67`, ref fallback `2`)
+- Chunks 1–3: encoder_output drifts (cache_len_out stays negative on ORT: `-134, -201, -268`)
+- Cache outputs remain zero for all chunks (`cache_last_channel_out` and `cache_last_time_out` max_abs=0)
+
+### Interpretation
+- Closed‑loop parity fails because the exported streaming encoder outputs **negative cache_len** and **zero cache tensors**, so state does not propagate even in ORT. Fixing cache_len_out semantics (or emitting usable cache tensors) is required before closed‑loop parity can pass.

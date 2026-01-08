@@ -182,10 +182,18 @@ def main() -> int:
     enc_diff = enc_ort_t0 - enc_trt_t0
     enc_stats = stats(enc_diff)
 
+    cache_len_out = out_map.get("cache_last_channel_len_out")
+    cache_len_out_val = None
+    if cache_len_out is not None:
+        cache_len_out_val = int(np.array(cache_len_out).reshape(-1)[0])
+
     print("Encoder step-0 parity:")
     print(f"  enc_out_t0 max_abs={enc_stats['max_abs']:.6f} mean_abs={enc_stats['mean_abs']:.6f} p99_abs={enc_stats['p99_abs']:.6f}")
     print(f"  cache_in max_abs: channel={float(np.max(np.abs(cache_ch))):.6f} time={float(np.max(np.abs(cache_tm))):.6f}")
-    print(f"  features_valid={T_valid} cache_len_in={cache_len_in}")
+    if cache_len_out_val is None:
+        print(f"  features_valid={T_valid} cache_len_in={cache_len_in}")
+    else:
+        print(f"  features_valid={T_valid} cache_len_in={cache_len_in} cache_len_out_ort={cache_len_out_val}")
 
     enc_slice_path = os.path.join(args.trt_dir, "enc_slice_trt.f32")
     meta_trt_path = os.path.join(args.trt_dir, "meta_trt.json")
@@ -217,6 +225,15 @@ def main() -> int:
             describe("enc_ort + pred_pt", out, dur_offset, dur_bins)
         else:
             print("ORT joint skipped (missing pt snapshot inputs)")
+
+    trt_len_meta = os.path.join(args.trt_dir, "cache_last_channel_len_out_trt.json")
+    if os.path.exists(trt_len_meta):
+        with open(trt_len_meta, "r", encoding="utf-8") as f:
+            trt_meta = json.load(f)
+        raw = trt_meta.get("raw")
+        effective = trt_meta.get("effective")
+        dtype = trt_meta.get("dtype")
+        print(f"TRT cache_len_out: raw={raw} effective={effective} dtype={dtype}")
 
     return 0
 
