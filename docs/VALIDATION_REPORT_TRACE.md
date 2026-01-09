@@ -421,19 +421,44 @@ python tools/stt_suite/score_wer.py \
 
 ## Feature parity spot-check (runtime vs NeMo)
 ```bash
+LD_LIBRARY_PATH=cpp/build:$LD_LIBRARY_PATH \
+  ./rust/target/debug/cli eval/wav/librispeech_dev_gate/dev-clean/1272-128104-0000.wav \
+  --model-dir models/parakeet-tdt-0.6b-v3 \
+  --feature-norm per_feature \
+  --dump-features /tmp/tdt_features_0000_perfeat.f32 \
+  --features-only
+
 python tools/verify_nemo/compare_features.py \
   --model models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
   --wav eval/wav/librispeech_dev_gate/dev-clean/1272-128104-0000.wav \
   --runtime-features /tmp/tdt_features_0000_perfeat.f32 \
-  --chunk-frames-list /tmp/tdt_chunks_0000_perfeat.json \
   --runtime-layout bins_major \
+  --normalize per_feature \
+  --device cpu
+
+LD_LIBRARY_PATH=cpp/build:$LD_LIBRARY_PATH \
+  ./rust/target/debug/cli eval/wav/librispeech_dev_gate/dev-clean/1272-128104-0000.wav \
+  --model-dir models/parakeet-tdt-0.6b-v3 \
+  --feature-norm per_feature \
+  --dump-features /tmp/tdt_features_0000_stream_perfeat.f32 \
+  --dump-chunk-frames /tmp/tdt_chunks_0000_stream.json \
+  --stream-sim 0.5 \
+  --no-sleep \
+  --features-only
+
+python tools/verify_nemo/compare_features.py \
+  --model models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3.nemo \
+  --wav eval/wav/librispeech_dev_gate/dev-clean/1272-128104-0000.wav \
+  --runtime-features /tmp/tdt_features_0000_stream_perfeat.f32 \
+  --runtime-layout bins_major \
+  --chunk-frames-list /tmp/tdt_chunks_0000_stream.json \
   --normalize per_feature \
   --device cpu
 ```
 
 ### Results
-- Large feature deltas vs NeMo preprocessor: overall `max_abs ≈ 4.8`, `mean_abs ≈ 1.15`, `p99_abs ≈ 3.19`.
-- Similar magnitudes observed on `dev-clean/1272-128104-0002.wav` (see command output in logs).
+- Offline parity (per_feature): `max_abs ≈ 2.1e-4`, `mean_abs ≈ 1.9e-6`, `p99_abs ≈ 1.6e-5`.
+- Streaming parity (per_feature, chunked): `max_abs ≈ 1.9e-4`, `mean_abs ≈ 1.4e-6`, `p99_abs ≈ 1.1e-5`.
 
 ## Legacy: Trimmed stopgap (superseded)
 - `artifacts/trace/librispeech_dev_gate_trimmed10.tsv`

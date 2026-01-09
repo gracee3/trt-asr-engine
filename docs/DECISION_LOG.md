@@ -82,3 +82,8 @@
   Alternatives: drop tail chunks or broaden TRT profile min T.
   Evidence: Tail chunks <41 previously caused TRT shape errors; after padding + relaxed `encoder_output` time-dim check, untrimmed 1‑utt and 10‑utt runs succeed with 0 empty transcripts.
   Validation: `artifacts/logs/tdt_1utt_trt_fp32_noTF32_untrimmed.*` and `artifacts/logs/tdt_10utt_fp32_noTF32_untrimmed/all_results.json`.
+
+- Decision: Align runtime feature extraction to NeMo `FilterbankFeatures` (preemph=0.97, Slaney mel + Slaney norm, centered STFT with zero padding, window padded to n_fft, log guard 2^-24).
+  Alternatives: keep HTK mel + center=false + preemph=0.0 (previous runtime defaults).
+  Evidence: `tools/verify_nemo/compare_features.py` now shows tight parity (offline and streaming) with max_abs ≈ `2e-4` and mean_abs ≈ `2e-6` on dev-clean 0000/0002.
+  Validation: re-run feature parity spot-checks and ensure WER no longer collapses to punctuation-only outputs.
