@@ -1,5 +1,12 @@
 use clap::Parser;
-use features::{FeatureConfig, LogMelExtractor, compute_per_feature_stats, apply_per_feature_norm, NormalizationMode};
+use features::{
+    FeatureConfig,
+    LogMelExtractor,
+    StreamingLogMelExtractor,
+    compute_per_feature_stats,
+    apply_per_feature_norm,
+    NormalizationMode,
+};
 use parakeet_trt::{ParakeetSessionSafe, TranscriptionEvent};
 use serde_json::{Value, json};
 use std::env;
@@ -51,6 +58,9 @@ struct Args {
 
     #[arg(long, value_parser = ["none", "per_feature"], help = "Feature normalization (overrides PARAKEET_FEATURE_NORM)")]
     feature_norm: Option<String>,
+
+    #[arg(long, help = "Compute/dump features but skip runtime inference")]
+    features_only: bool,
 }
 
 #[derive(Debug, Default)]
@@ -397,6 +407,7 @@ fn main() -> anyhow::Result<()> {
     // 2. Setup Feature Extractor
     let config = FeatureConfig::default();
     let extractor = LogMelExtractor::new(config);
+    let mut stream_extractor = StreamingLogMelExtractor::new(config);
     let n_mels = extractor.n_mels();
     let mut per_feature_stats = None;
     let mut offline_features_tc = None;
@@ -410,28 +421,34 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // 3. Setup Runtime
-    let session = ParakeetSessionSafe::new(
-        args.model_dir.to_str().unwrap(),
-        args.device_id,
-        true,
-    )?;
+    // 3. Setup Runtime (optional)
+    let session = if args.features_only {
+        None
+    } else {
+        Some(ParakeetSessionSafe::new(
+            args.model_dir.to_str().unwrap(),
+            args.device_id,
+            true,
+        )?)
+    };
 
-    println!("Starting transcription...");
+    if session.is_some() {
+        println!("Starting transcription...");
+    }
 
     if let Some(interval) = args.stream_sim {
         // Simulated streaming
         let samples_per_chunk = (interval * 16000.0) as usize;
         let mut pos = 0;
         let mut chunk_idx = 0;
-        let mut all_features_bct = Vec::new();
+        let mut all_features_tc = Vec::new();
         let mut chunk_frames_list: Vec<usize> = Vec::new();
 
         while pos < audio.len() {
             let end = (pos + samples_per_chunk).min(audio.len());
             let chunk = &audio[pos..end];
 
-            let mut features_tc = extractor.compute(chunk);
+            let mut features_tc = stream_extractor.push(chunk);
             let num_frames = features_tc.len() / n_mels;
 
             if num_frames > 0 {
@@ -444,7 +461,7 @@ fn main() -> anyhow::Result<()> {
                 let features_bct = frames_major_to_bins_major(&features_tc, n_mels, num_frames);
 
                 if args.dump_features.is_some() {
-                    all_features_bct.extend_from_slice(&features_bct);
+                    all_features_tc.extend_from_slice(&features_tc);
                 }
 
                 if args.verbose {
@@ -452,9 +469,61 @@ fn main() -> anyhow::Result<()> {
                              chunk_idx, pos, chunk.len(), num_frames);
                 }
 
-                session.push_features(&features_bct, num_frames)?;
+                if let Some(ref session) = session {
+                    session.push_features(&features_bct, num_frames)?;
 
-                // Poll for events
+                    // Poll for events
+                    while let Some(event) = session.poll_event() {
+                        match event {
+                            TranscriptionEvent::PartialText { text, .. } => {
+                                if args.verbose {
+                                    eprintln!("[replay] Partial: {}", text);
+                                } else {
+                                    print!("\rPartial: {}", text);
+                                    use std::io::{self, Write};
+                                    io::stdout().flush().unwrap();
+                                }
+                            }
+                            TranscriptionEvent::FinalText { text, .. } => {
+                                println!("\nFinal: {}", text);
+                            }
+                            TranscriptionEvent::Error { message } => {
+                                eprintln!("\nError: {}", message);
+                            }
+                        }
+                    }
+                }
+            }
+
+            pos = end;
+            chunk_idx += 1;
+            if !args.no_sleep {
+                thread::sleep(Duration::from_secs_f32(interval));
+            }
+        }
+
+        // Flush remaining frames with right padding to match offline framing.
+        let mut tail_features_tc = stream_extractor.finalize();
+        let tail_frames = tail_features_tc.len() / n_mels;
+        if tail_frames > 0 {
+            chunk_frames_list.push(tail_frames);
+            if feature_norm == NormalizationMode::PerFeature {
+                if let Some(stats) = per_feature_stats.as_ref() {
+                    apply_per_feature_norm(&mut tail_features_tc, n_mels, tail_frames, stats);
+                }
+            }
+            let features_bct = frames_major_to_bins_major(&tail_features_tc, n_mels, tail_frames);
+
+            if args.dump_features.is_some() {
+                all_features_tc.extend_from_slice(&tail_features_tc);
+            }
+
+            if args.verbose {
+                eprintln!("[replay] tail_chunk={} frames={}", chunk_idx, tail_frames);
+            }
+
+            if let Some(ref session) = session {
+                session.push_features(&features_bct, tail_frames)?;
                 while let Some(event) = session.poll_event() {
                     match event {
                         TranscriptionEvent::PartialText { text, .. } => {
@@ -475,18 +544,13 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             }
-
-            pos = end;
-            chunk_idx += 1;
-            if !args.no_sleep {
-                thread::sleep(Duration::from_secs_f32(interval));
-            }
         }
 
         // Dump features if requested
         if let Some(ref dump_path) = args.dump_features {
-            let total_frames = all_features_bct.len() / n_mels;
-            dump_features_to_file(&all_features_bct, dump_path)?;
+            let total_frames = all_features_tc.len() / n_mels;
+            let features_bct = frames_major_to_bins_major(&all_features_tc, n_mels, total_frames);
+            dump_features_to_file(&features_bct, dump_path)?;
             if args.verbose {
                 eprintln!("[replay] Dumped {} frames to {:?}", total_frames, dump_path);
             }
@@ -548,14 +612,16 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        session.push_features(&features_bct, num_frames)?;
+        if let Some(ref session) = session {
+            session.push_features(&features_bct, num_frames)?;
 
-        while let Some(event) = session.poll_event() {
-            match event {
-                TranscriptionEvent::FinalText { text, .. } => println!("Transcript: {}", text),
-                TranscriptionEvent::PartialText { text, .. } if args.verbose => eprintln!("[replay] Partial: {}", text),
-                TranscriptionEvent::Error { message } => eprintln!("Error: {}", message),
-                _ => {}
+            while let Some(event) = session.poll_event() {
+                match event {
+                    TranscriptionEvent::FinalText { text, .. } => println!("Transcript: {}", text),
+                    TranscriptionEvent::PartialText { text, .. } if args.verbose => eprintln!("[replay] Partial: {}", text),
+                    TranscriptionEvent::Error { message } => eprintln!("Error: {}", message),
+                    _ => {}
+                }
             }
         }
     }
