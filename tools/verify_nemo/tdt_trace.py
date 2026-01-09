@@ -35,13 +35,16 @@ def load_vocab_ids(vocab_path: str, tokens: List[str]) -> Dict[str, int]:
     return mapping
 
 
-def load_features_f32(path: str, n_mels: int) -> np.ndarray:
+def load_features_f32(path: str, n_mels: int, layout: str) -> np.ndarray:
     raw = np.fromfile(path, dtype=np.float32)
     if raw.size % n_mels != 0:
         raise RuntimeError(f"features size {raw.size} not divisible by n_mels={n_mels}")
     t = raw.size // n_mels
-    # Runtime dumps are time-major [T, C]. Convert to [C, T] for model encoder.
-    return raw.reshape(t, n_mels).T
+    if layout == "frames_major":
+        return raw.reshape(t, n_mels).T
+    if layout != "bins_major":
+        raise RuntimeError(f"Unsupported features layout: {layout}")
+    return raw.reshape(n_mels, t)
 
 
 def load_chunk_frames_list(path: str) -> List[int]:
@@ -201,6 +204,7 @@ def main() -> int:
     ap.add_argument("--vocab", default="", help="Path to vocab.txt (optional)")
     ap.add_argument("--features-f32", required=True, help="Path to f32le features [C,T]")
     ap.add_argument("--n-mels", type=int, default=0)
+    ap.add_argument("--features-layout", choices=["bins_major", "frames_major"], default="bins_major")
     ap.add_argument("--chunk-frames", type=int, default=0)
     ap.add_argument("--chunk-frames-list", default="", help="JSON list or {chunk_frames:[...]} for chunk boundaries")
     ap.add_argument("--stream-sim", type=float, default=0.0, help="Chunk size in seconds (if chunk-frames not set)")
@@ -241,7 +245,7 @@ def main() -> int:
     model = model.to(device)
 
     n_mels = args.n_mels or int(model.cfg.preprocessor.get("features", 128))
-    feats = load_features_f32(args.features_f32, n_mels)
+    feats = load_features_f32(args.features_f32, n_mels, args.features_layout)
 
     if args.chunk_frames > 0:
         chunk_frames = args.chunk_frames
